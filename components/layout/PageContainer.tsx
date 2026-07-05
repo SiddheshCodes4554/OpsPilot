@@ -26,10 +26,10 @@ export function PageContainer({
       {...props}
     >
       {(title || description || actions) && (
-        <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-4 mb-8 pb-6 border-b border-zinc-100 dark:border-zinc-800">
+        <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-4 mb-8 pb-6 border-b border-zinc-900">
           <div className="space-y-1.5">
             {title && (
-              <h1 className="text-3xl font-bold tracking-tight bg-gradient-to-r from-zinc-900 via-zinc-800 to-zinc-600 dark:from-zinc-50 dark:via-zinc-200 dark:to-zinc-400 bg-clip-text text-transparent">
+              <h1 className="text-2xl font-semibold tracking-tight text-zinc-100">
                 {title}
               </h1>
             )}

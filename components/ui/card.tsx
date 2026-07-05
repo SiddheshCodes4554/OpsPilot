@@ -11,9 +11,9 @@ const Card = React.forwardRef<HTMLDivElement, CardProps>(
     <div
       ref={ref}
       className={cn(
-        "rounded-xl border border-zinc-200 bg-white text-zinc-950 shadow-sm transition-all duration-300 dark:border-zinc-800 dark:bg-zinc-950 dark:text-zinc-50",
-        hoverEffect && "hover:-translate-y-1 hover:shadow-md hover:border-zinc-300 dark:hover:border-zinc-700",
-        glassmorphism && "bg-white/60 dark:bg-zinc-950/60 backdrop-blur-md",
+        "rounded-lg border border-zinc-900 bg-zinc-950 text-zinc-50 shadow-sm transition-colors duration-200",
+        hoverEffect && "hover:border-zinc-800 hover:bg-zinc-900/30",
+        glassmorphism && "bg-zinc-950/80 backdrop-blur-md",
         className
       )}
       {...props}
@@ -66,7 +66,7 @@ const CardFooter = React.forwardRef<HTMLDivElement, React.HTMLAttributes<HTMLDiv
   ({ className, ...props }, ref) => (
     <div
       ref={ref}
-      className={cn("flex items-center p-6 pt-0 border-t border-zinc-50 dark:border-zinc-900 mt-6", className)}
+      className={cn("flex items-center p-6 pt-0 border-t border-zinc-900 mt-6", className)}
       {...props}
     />
   )
