@@ -3,6 +3,7 @@ import { UserButton } from "@clerk/nextjs"
 import { currentUser } from "@clerk/nextjs/server"
 import { DashboardShell } from "@/components/layout/DashboardShell"
 import { Sidebar } from "@/components/layout/Sidebar"
+import { NotificationCenter } from "@/components/layout/NotificationCenter"
 
 export default async function DashboardLayout({
   children,
@@ -19,6 +20,7 @@ export default async function DashboardLayout({
         { label: "Inbox", href: "/inbox", icon: "inbox" },
         { label: "Inventory", href: "/inventory", icon: "inventory" },
         { label: "Procurement", href: "/procurement", icon: "procurement" },
+        { label: "Approvals", href: "/approvals", icon: "approvals" },
         { label: "Workforce", href: "#", icon: "users", badge: "3" },
         { label: "Operations", href: "#", icon: "activity" },
       ],
@@ -59,8 +61,11 @@ export default async function DashboardLayout({
 
   const breadcrumbs = ["OpsPilot AI", "Dashboard"]
   const navbarActions = (
-    <div className="text-zinc-500 text-[11px] font-medium px-2 py-1 rounded bg-zinc-900 border border-zinc-800">
-      Command + K
+    <div className="flex items-center gap-3.5">
+      <div className="text-zinc-500 text-[11px] font-medium px-2 py-1 rounded bg-zinc-900 border border-zinc-800">
+        Command + K
+      </div>
+      <NotificationCenter />
     </div>
   )
 

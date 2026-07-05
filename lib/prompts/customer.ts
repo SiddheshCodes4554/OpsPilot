@@ -1,7 +1,7 @@
 import { z } from "zod"
 import { PromptMetadata, PromptExample } from "./types"
 
-export const VERSION = "1.1.0"
+export const VERSION = "1.2.0"
 
 export const METADATA: PromptMetadata = {
   name: "customer-email-classifier",
@@ -12,12 +12,16 @@ export const METADATA: PromptMetadata = {
 export const OUTPUT_SCHEMA = z.object({
   customerName: z.string().nullable(),
   intent: z.enum([
-    "ORDER_INQUIRY",
-    "REFUND_REQUEST",
-    "WARRANTY_CLAIM",
-    "SUPPORT_INQUIRY",
-    "STOCK_CHECK",
-    "OTHER",
+    "ORDER",
+    "PRODUCT_INQUIRY",
+    "WARRANTY",
+    "RETURN",
+    "REFUND",
+    "COMPLAINT",
+    "SUPPLIER",
+    "SHIPPING",
+    "GENERAL",
+    "UNKNOWN"
   ]),
   priority: z.enum(["LOW", "MEDIUM", "HIGH"]),
   product: z.string().nullable(),
@@ -40,23 +44,21 @@ Your output must strictly match the output JSON schema.
 
 Field details:
 - "customerName": Extract the sender's name if signed or mentioned, else null.
-- "intent": Categorize the customer's request:
-  * ORDER_INQUIRY: Inquiries about existing orders, tracking, invoices.
-  * REFUND_REQUEST: Requests for refunds, returns, cancellations.
-  * WARRANTY_CLAIM: Requests for warranty services, repairs, replacements.
-  * SUPPORT_INQUIRY: Technical help, specs questions, usage questions.
-  * STOCK_CHECK: Asking if products are in stock or about future restock.
-  * OTHER: General comments, greetings, spam.
-- "priority": Classification:
-  * HIGH: Mentions broken devices upon receipt, threats, urgent deadlines.
-  * MEDIUM: Standard queries, returns.
-  * LOW: General inquiries, greetings.
+- "intent": Categorize the customer's request into exactly one of these intents:
+  * ORDER: Placing a new order for products.
+  * PRODUCT_INQUIRY: Inquiring about product specifications, technical details, or pricing.
+  * WARRANTY: Warranty service claims, repairs, or replacements for devices under warranty.
+  * RETURN: Asking to return a product.
+  * REFUND: Requesting a financial refund.
+  * COMPLAINT: Expressing dissatisfaction or complaining about a service, product, or experience.
+  * SUPPLIER: Wholesaler/Supplier relations or wholesale shipments.
+  * SHIPPING: Inquiring about tracking numbers, shipment ETA, delivery addresses.
+  * GENERAL: General conversation, greetings, comments.
+  * UNKNOWN: Spam, illegible, or unrecognized intents.
+- "priority": Classification (LOW, MEDIUM, HIGH).
 - "product": Extract product name or SKU if mentioned, else null.
 - "quantity": Extract requested item count if mentioned, else null.
-- "urgency": Extracted level of urgency based on email tone, language, and deadlines:
-  * HIGH: Demands immediate action, expresses frustration, mentions breakage.
-  * MEDIUM: Standard service request or product inquiry with standard follow-up.
-  * LOW: Informational queries, no immediate action required.
+- "urgency": Extracted level of urgency (LOW, MEDIUM, HIGH) based on email tone, language, and deadlines.
 - "confidence": Float between 0.0 and 1.0 representing your classification confidence.`
 
 export const USER_PROMPT_TEMPLATE = (input: CustomerInput): string => {
@@ -71,7 +73,7 @@ export const EXAMPLES: PromptExample<CustomerInput, CustomerOutput>[] = [
     },
     output: {
       customerName: "John",
-      intent: "SUPPORT_INQUIRY",
+      intent: "PRODUCT_INQUIRY",
       priority: "LOW",
       product: "iPad Air M1",
       quantity: null,
@@ -82,11 +84,11 @@ export const EXAMPLES: PromptExample<CustomerInput, CustomerOutput>[] = [
   {
     input: {
       subject: "Urgent: Received broken TV screen",
-      body: "Hello, I just opened the box for my order #4801 but the screen of my new Dell UltraSharp is cracked. I need a refund or a replacement today!\n\nThanks,\nAlice",
+      body: "Hello, I just opened the box for my order #4801 but the screen of my new Dell UltraSharp is cracked. I need a refund today!\n\nThanks,\nAlice",
     },
     output: {
       customerName: "Alice",
-      intent: "REFUND_REQUEST",
+      intent: "REFUND",
       priority: "HIGH",
       product: "Dell UltraSharp",
       quantity: 1,

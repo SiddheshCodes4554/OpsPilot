@@ -3,7 +3,7 @@
 import React from "react"
 import Link from "next/link"
 import { usePathname } from "next/navigation"
-import { HelpCircle, LayoutDashboard, Users, Activity, Settings, Inbox, Boxes, Truck } from "lucide-react"
+import { HelpCircle, LayoutDashboard, Users, Activity, Settings, Inbox, Boxes, Truck, FileCheck } from "lucide-react"
 import { cn } from "@/lib/utils"
 
 const iconMap = {
@@ -14,6 +14,7 @@ const iconMap = {
   inbox: Inbox,
   inventory: Boxes,
   procurement: Truck,
+  approvals: FileCheck,
 }
 
 export interface SidebarItem {

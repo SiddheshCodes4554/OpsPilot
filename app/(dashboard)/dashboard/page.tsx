@@ -1,82 +1,163 @@
 import React from "react"
 import { PageContainer } from "@/components/layout/PageContainer"
-import { Section } from "@/components/layout/Section"
-import { Card, CardHeader, CardTitle, CardDescription, CardContent } from "@/components/ui/card"
 import { prisma } from "@/lib/prisma"
-
-// Import modular dashboard widgets
-import { OrdersToday } from "@/features/dashboard/components/OrdersToday"
-import { InventoryHealth } from "@/features/dashboard/components/InventoryHealth"
-import { LowStockItems } from "@/features/dashboard/components/LowStockItems"
-import { PendingPurchaseOrders } from "@/features/dashboard/components/PendingPurchaseOrders"
-import { RecentActivity } from "@/features/dashboard/components/RecentActivity"
-import { BusinessSnapshot } from "@/features/dashboard/components/BusinessSnapshot"
+import { DashboardClient } from "@/components/dashboard/DashboardClient"
 
 export default async function DashboardPage() {
-  // Fetch active AI agents for the workspace listing
+  const startOfToday = new Date()
+  startOfToday.setHours(0, 0, 0, 0)
+
+  // 1. Fetch initial Orders Today
+  const todayOrders = await prisma.order.findMany({
+    where: {
+      createdAt: {
+        gte: startOfToday,
+      },
+    },
+    select: {
+      totalAmount: true,
+    },
+  })
+  const ordersCount = todayOrders.length
+  const ordersTotal = todayOrders.reduce((sum, order) => sum + Number(order.totalAmount), 0)
+
+  // 2. Fetch initial Pending POs
+  const pendingPos = await prisma.purchaseOrder.findMany({
+    where: {
+      status: "PENDING",
+    },
+    select: {
+      totalAmount: true,
+    },
+  })
+  const posCount = pendingPos.length
+  const posTotal = pendingPos.reduce((sum, po) => sum + Number(po.totalAmount), 0)
+
+  // 3. Fetch initial Inventory Health counts
+  const totalInventoryItems = await prisma.inventory.count()
+  const lowStockCount = await prisma.inventory.count({
+    where: {
+      quantity: {
+        lte: prisma.inventory.fields.minStockLevel,
+      },
+    },
+  })
+
+  // 4. Fetch initial Business Snapshot metrics
+  const [dbProductCount, dbSupplierCount, dbOrderCount, dbAllOrders] = await Promise.all([
+    prisma.product.count(),
+    prisma.supplier.count(),
+    prisma.order.count(),
+    prisma.order.findMany({ select: { totalAmount: true } }),
+  ])
+  const totalSalesVolume = dbAllOrders.reduce((sum, order) => sum + Number(order.totalAmount), 0)
+
+  // 5. Fetch initial Agent Status
+  const latestLog = await prisma.agentLog.findFirst({
+    orderBy: { createdAt: "desc" },
+  })
+  let agentStatus = "IDLE"
+  let statusMessage = "AI Agents are waiting for incoming workflows."
+  if (latestLog) {
+    if (latestLog.level === "ERROR") {
+      agentStatus = "ERROR"
+      statusMessage = `Error: ${latestLog.message}`
+    } else if (latestLog.message.includes("Initiated")) {
+      agentStatus = "BUSY"
+      statusMessage = latestLog.message
+    } else {
+      agentStatus = "IDLE"
+      statusMessage = `Last action: ${latestLog.action}`
+    }
+  }
+
+  // 6. Fetch initial Workflow Timeline logs
+  const recentLogs = await prisma.agentLog.findMany({
+    orderBy: { createdAt: "desc" },
+    take: 10,
+  })
+
+  // 7. Fetch initial notifications
+  const recentNotifications = await prisma.notification.findMany({
+    orderBy: { createdAt: "desc" },
+    take: 5,
+  })
+
+  // 8. Fetch initial Low Stock items list
+  const lowStockItems = await prisma.product.findMany({
+    where: {
+      inventory: {
+        quantity: {
+          lte: prisma.inventory.fields.minStockLevel,
+        },
+      },
+    },
+    include: {
+      inventory: true,
+    },
+    take: 5,
+  })
+
+  // 9. Fetch active AI agent users
   const activeAgents = await prisma.user.findMany({
     where: { role: "AI_AGENT" },
     select: { id: true, name: true, email: true },
   })
+
+  // Assemble the hydrated initialData payload for Next.js Client Component
+  const initialData = {
+    ordersToday: {
+      count: ordersCount,
+      totalAmount: ordersTotal,
+    },
+    pendingPurchaseOrders: {
+      count: posCount,
+      totalAmount: posTotal,
+    },
+    inventoryHealth: {
+      totalCount: totalInventoryItems,
+      lowStockCount,
+    },
+    businessSnapshot: {
+      productCount: dbProductCount,
+      supplierCount: dbSupplierCount,
+      orderCount: dbOrderCount,
+      totalSales: totalSalesVolume,
+    },
+    agentStatus: {
+      status: agentStatus,
+      message: statusMessage,
+      lastUpdatedAt: latestLog?.createdAt.toISOString() || new Date().toISOString(),
+    },
+    workflowTimeline: recentLogs.map((log) => ({
+      id: log.id,
+      action: log.action,
+      level: log.level,
+      message: log.message,
+      createdAt: log.createdAt.toISOString(),
+    })),
+    notifications: recentNotifications.map((n) => ({
+      id: n.id,
+      title: n.title,
+      content: n.content,
+      createdAt: n.createdAt.toISOString(),
+    })),
+    lowStockItems: lowStockItems.map((item) => ({
+      id: item.id,
+      name: item.name,
+      sku: item.sku,
+      quantity: item.inventory?.quantity ?? 0,
+      minStockLevel: item.inventory?.minStockLevel ?? 10,
+    })),
+    activeAgents,
+  }
 
   return (
     <PageContainer
       title="Workspace Operations"
       description="Autonomous workforce triggers, active inventory telemetry, and real-time transaction tracking."
     >
-      {/* KPI Stats Grid */}
-      <Section title="Operational Metrics" description="Real-time performance metrics and procurement tracking.">
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-          <OrdersToday />
-          <PendingPurchaseOrders />
-          <InventoryHealth />
-          <BusinessSnapshot />
-        </div>
-      </Section>
-
-      {/* Workspace Widgets Split Grid */}
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-        {/* Column 1: Recent activity and system notifications */}
-        <div className="lg:col-span-1">
-          <Section title="Operational Activity" description="Latest traces and logs.">
-            <RecentActivity />
-          </Section>
-        </div>
-
-        {/* Column 2: Low Stock alerts */}
-        <div className="lg:col-span-1">
-          <Section title="Inventory Thresholds" description="Items requiring attention.">
-            <LowStockItems />
-          </Section>
-        </div>
-
-        {/* Column 3: Active AI agents */}
-        <div className="lg:col-span-1">
-          <Section title="AI Workforce" description="Active agent executors.">
-            <Card className="h-full">
-              <CardHeader>
-                <CardTitle>Workspace Agents</CardTitle>
-                <CardDescription>AI user profiles active in this tenant</CardDescription>
-              </CardHeader>
-              <CardContent className="space-y-3">
-                {activeAgents.length === 0 ? (
-                  <p className="text-xs text-zinc-500 py-6 text-center">No agents active.</p>
-                ) : (
-                  activeAgents.map((agent: { id: string; name: string | null; email: string }) => (
-                    <div
-                      key={agent.id}
-                      className="p-3 rounded border border-zinc-900 bg-zinc-950/30 text-xs space-y-1"
-                    >
-                      <div className="font-semibold text-zinc-200">{agent.name}</div>
-                      <div className="text-[10px] text-zinc-500 truncate">{agent.email}</div>
-                    </div>
-                  ))
-                )}
-              </CardContent>
-            </Card>
-          </Section>
-        </div>
-      </div>
+      <DashboardClient initialData={initialData} />
     </PageContainer>
   )
 }
