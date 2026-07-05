@@ -25,7 +25,9 @@ export class ResendProvider implements EmailProvider {
           from: payload.from,
           to: payload.to,
           subject: payload.subject,
-          html: `<div style="font-family: sans-serif; white-space: pre-wrap;">${payload.body}</div>`,
+          // Prefer structured HTML from templates; fallback to wrapped plain text
+          html: payload.html ?? `<div style="font-family: sans-serif; white-space: pre-wrap;">${payload.body}</div>`,
+          text: payload.body,
         }),
       })
 

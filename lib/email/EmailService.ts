@@ -78,4 +78,34 @@ export class EmailService {
       meta: { category: "notification" },
     })
   }
+
+  /**
+   * Sends a fully rendered template email (produced by renderTemplate()).
+   * Passes both structured HTML and plain-text fallback to the provider.
+   *
+   * @example
+   *   const rendered = await renderTemplate(buildOrderConfirmationTemplate({ ... }))
+   *   await emailService.sendRendered(customerEmail, rendered, "customer")
+   */
+  async sendRendered(
+    to: string,
+    rendered: { subject: string; html: string; text: string },
+    category: "customer" | "supplier" | "approval" | "notification" = "notification"
+  ): Promise<boolean> {
+    const fromMap: Record<string, string> = {
+      customer: process.env.EMAIL_FROM_CUSTOMER || "support@opspilot.ai",
+      supplier: process.env.EMAIL_FROM_SUPPLIER || "procurement@opspilot.ai",
+      approval: process.env.EMAIL_FROM_APPROVAL || "approvals@opspilot.ai",
+      notification: process.env.EMAIL_FROM_NOTIFICATION || "alerts@opspilot.ai",
+    }
+
+    return this.provider.send({
+      to,
+      from: fromMap[category],
+      subject: rendered.subject,
+      body: rendered.text,
+      html: rendered.html,
+      meta: { category, templated: true },
+    })
+  }
 }
