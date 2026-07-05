@@ -201,44 +201,21 @@ export class ManagerAgent {
             throw new Error("Missing required inputs (email, subject, body) for CUSTOMER_INQUIRY_WORKFLOW.")
           }
 
-          log(`Step 1: Dispatching CUSTOMER_LOOKUP to CustomerAgent for email: "${email}"`)
-          const customerResult = await this.customerAgent.execute(
+          log(`Step 1: Dispatching ANALYZE_EMAIL to CustomerAgent for email subject: "${subject}"`)
+          const analysisResult = await this.customerAgent.execute(
             {
               id: `${task.id}-step1`,
-              type: "CUSTOMER_LOOKUP",
-              description: `Looking up customer profile for ${email}`,
-              input: { email },
+              type: "ANALYZE_EMAIL",
+              description: `Analyzing customer support email: ${subject}`,
+              input: { email, subject, body },
               createdAt: new Date(),
             },
             context
           )
-          logs.push(...customerResult.logs)
+          logs.push(...analysisResult.logs)
 
-          if (customerResult.status === "FAILURE") {
-            throw new Error(`Customer lookup failed: ${customerResult.errors?.join(", ")}`)
-          }
-
-          log(`Step 2: Dispatching LOG_CUSTOMER_EMAIL to CustomerAgent`)
-          const logEmailResult = await this.customerAgent.execute(
-            {
-              id: `${task.id}-step2`,
-              type: "LOG_CUSTOMER_EMAIL",
-              description: `Logging email thread from ${email}`,
-              input: {
-                email,
-                subject,
-                body,
-                status: "RECEIVED",
-                priority: "MEDIUM",
-              },
-              createdAt: new Date(),
-            },
-            context
-          )
-          logs.push(...logEmailResult.logs)
-
-          if (logEmailResult.status === "FAILURE") {
-            throw new Error(`Customer email log failed: ${logEmailResult.errors?.join(", ")}`)
+          if (analysisResult.status === "FAILURE") {
+            throw new Error(`Customer email analysis failed: ${analysisResult.errors?.join(", ")}`)
           }
 
           log("Customer inquiry workflow executed successfully.")
@@ -247,8 +224,7 @@ export class ManagerAgent {
             status: "SUCCESS",
             output: {
               workflowCompleted: true,
-              customerLookup: customerResult.output,
-              loggedEmail: logEmailResult.output,
+              analysis: analysisResult.output,
             },
             logs,
           }

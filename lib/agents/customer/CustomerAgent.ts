@@ -1,19 +1,23 @@
-import { prisma } from "@/lib/prisma"
-import { EmailStatus, EmailPriority } from "@prisma/client"
 import { Task, AgentResult, AgentContext, ExecutionLog } from "../shared/types"
 import { IAgentLogger } from "../../logger/types"
 import { AgentLogger } from "../../logger/AgentLogger"
+import { GroqService } from "../../ai/GroqService"
+import { SYSTEM_PROMPT, USER_PROMPT_TEMPLATE, OUTPUT_SCHEMA } from "../../prompts/customer"
 
 export class CustomerAgent {
   private agentName = "CustomerAgent"
   private logger: IAgentLogger
+  private groqService: GroqService
 
   constructor(logger?: IAgentLogger) {
     this.logger = logger ?? AgentLogger.getInstance()
+    this.groqService = GroqService.getInstance()
   }
 
   /**
-   * Executes customer-related CRM operations.
+   * Executes customer email analysis using Groq and the Prompt Engine.
+   * Extracts customerName, intent, priority, product, quantity, and urgency.
+   * Performs no database or inventory operations.
    */
   async execute(task: Task, context: AgentContext): Promise<AgentResult> {
     const logs: ExecutionLog[] = []
@@ -27,98 +31,52 @@ export class CustomerAgent {
       task.input as Record<string, unknown>
     )
 
-    log(`Received customer task: "${task.type}" - "${task.description}" (Session: ${context.sessionId})`)
+    log(`Received customer email task (Session: ${context.sessionId})`)
 
     try {
-      switch (task.type) {
-        case "CUSTOMER_LOOKUP": {
-          const { email } = task.input as { email?: string }
-          if (!email) {
-            throw new Error("Missing customer email in input.")
-          }
-          log(`Looking up customer profile for: ${email}`)
-
-          const customer = await prisma.customer.findUnique({
-            where: { email },
-            include: {
-              orders: {
-                take: 5,
-                orderBy: { createdAt: "desc" },
-              },
-              emails: {
-                take: 5,
-                orderBy: { createdAt: "desc" },
-              },
-            },
-          })
-
-          if (!customer) {
-            log(`Customer not found for email: ${email}`, "WARN")
-            const result: AgentResult = {
-              agentName: this.agentName,
-              status: "SUCCESS",
-              output: { found: false },
-              logs,
-            }
-            this.logger.logSuccess(executionId, 1.0, result.output)
-            return result
-          }
-
-          log(`Customer found: "${customer.name}" associated with company "${customer.company || "N/A"}"`)
-          const result: AgentResult = {
-            agentName: this.agentName,
-            status: "SUCCESS",
-            output: { found: true, customer },
-            logs,
-          }
-          this.logger.logSuccess(executionId, 1.0, result.output)
-          return result
-        }
-
-        case "LOG_CUSTOMER_EMAIL": {
-          const { email, subject, body, status, priority } = task.input as {
-            email?: string
-            subject?: string
-            body?: string
-            status?: string
-            priority?: string
-          }
-          if (!email || !subject || !body) {
-            throw new Error("Missing required inputs (email, subject, body).")
-          }
-
-          log(`Logging support communication from: ${email}`)
-          const customer = await prisma.customer.findUnique({ where: { email } })
-
-          const newEmail = await prisma.email.create({
-            data: {
-              subject,
-              body,
-              status: (status || "RECEIVED") as EmailStatus,
-              priority: (priority || "MEDIUM") as EmailPriority,
-              sender: email,
-              recipient: "support@opspilot.ai",
-              customer: customer ? { connect: { id: customer.id } } : undefined,
-            },
-          })
-
-          log(`Communication successfully logged with ID: ${newEmail.id}`)
-          const result: AgentResult = {
-            agentName: this.agentName,
-            status: "SUCCESS",
-            output: { logged: true, emailId: newEmail.id, email: newEmail },
-            logs,
-          }
-          this.logger.logSuccess(executionId, 1.0, result.output)
-          return result
-        }
-
-        default:
-          throw new Error(`Unsupported task type "${task.type}" for CustomerAgent.`)
+      const { subject, body, emailText } = task.input as {
+        subject?: string
+        body?: string
+        emailText?: string
       }
+
+      const emailBody = body || emailText || ""
+      const emailSubject = subject || "No Subject"
+
+      if (!emailBody && !emailSubject) {
+        throw new Error("Missing email content (subject or body) in input.")
+      }
+
+      log(`Preparing prompts for email classification...`)
+      
+      const messages = [
+        { role: "system" as const, content: SYSTEM_PROMPT },
+        { role: "user" as const, content: USER_PROMPT_TEMPLATE({ subject: emailSubject, body: emailBody }) },
+      ]
+
+      log(`Invoking Groq service for structured JSON extraction...`)
+
+      // Run structured analysis using Groq and validate with Zod schema
+      const analysis = await this.groqService.chatStructured(
+        messages,
+        OUTPUT_SCHEMA,
+        { temperature: 0.1 }
+      )
+
+      log(`Email analyzed successfully. Customer Name: "${analysis.customerName}", Intent: "${analysis.intent}"`)
+
+      const result: AgentResult = {
+        agentName: this.agentName,
+        status: "SUCCESS",
+        output: analysis as Record<string, unknown>,
+        logs,
+      }
+
+      this.logger.logSuccess(executionId, analysis.confidence, result.output)
+      return result
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err)
-      log(`Execution failed: ${message}`, "ERROR")
+      log(`Email analysis failed: ${message}`, "ERROR")
       this.logger.logFailure(executionId, err instanceof Error ? err : message)
       return {
         agentName: this.agentName,
