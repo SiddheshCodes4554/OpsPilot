@@ -1,7 +1,7 @@
 import { EXAMPLES as customerExamples, OUTPUT_SCHEMA as customerSchema, USER_PROMPT_TEMPLATE as customerTemplate, METADATA as customerMeta } from "../lib/prompts/customer"
 import { EXAMPLES as inventoryExamples, OUTPUT_SCHEMA as inventorySchema, USER_PROMPT_TEMPLATE as inventoryTemplate, METADATA as inventoryMeta } from "../lib/prompts/inventory"
 import { EXAMPLES as procurementExamples, OUTPUT_SCHEMA as procurementSchema, USER_PROMPT_TEMPLATE as procurementTemplate, METADATA as procurementMeta, EMAIL_DRAFT_EXAMPLES, EMAIL_DRAFT_SCHEMA, EMAIL_DRAFT_USER_TEMPLATE } from "../lib/prompts/procurement"
-import { EXAMPLES as supplierExamples, OUTPUT_SCHEMA as supplierSchema, USER_PROMPT_TEMPLATE as supplierTemplate, METADATA as supplierMeta } from "../lib/prompts/supplier"
+import { EXAMPLES as supplierExamples, OUTPUT_SCHEMA as supplierSchema, USER_PROMPT_TEMPLATE as supplierTemplate, METADATA as supplierMeta, REPLY_PARSER_EXAMPLES, REPLY_PARSER_SCHEMA, REPLY_PARSER_USER_TEMPLATE } from "../lib/prompts/supplier"
 import { EXAMPLES as analyticsExamples, OUTPUT_SCHEMA as analyticsSchema, USER_PROMPT_TEMPLATE as analyticsTemplate, METADATA as analyticsMeta } from "../lib/prompts/analytics"
 
 function testPrompts() {
@@ -60,6 +60,17 @@ function testPrompts() {
     console.log(`  """\n  ${supplierTemplate(ex.input).replace(/\n/g, "\n  ")}\n  """`)
     // Validate output matches Zod
     supplierSchema.parse(ex.output)
+    console.log("  ✅ Zod parsing validation passed.")
+  })
+  console.log("-----------------------------------------\n")
+
+  // --- Supplier Reply Parser prompt test ---
+  console.log(`📋 Prompt: supplier-reply-parser`)
+  REPLY_PARSER_EXAMPLES.forEach((ex, i) => {
+    console.log(`  Example ${i + 1} Input Render:`)
+    console.log(`  """\n  ${REPLY_PARSER_USER_TEMPLATE(ex.input).replace(/\n/g, "\n  ")}\n  """`)
+    // Validate output matches Zod
+    REPLY_PARSER_SCHEMA.parse(ex.output)
     console.log("  ✅ Zod parsing validation passed.")
   })
   console.log("-----------------------------------------\n")
