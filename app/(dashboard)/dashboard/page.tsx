@@ -62,7 +62,7 @@ export default async function DashboardPage() {
                 {activeAgents.length === 0 ? (
                   <p className="text-xs text-zinc-500 py-6 text-center">No agents active.</p>
                 ) : (
-                  activeAgents.map((agent) => (
+                  activeAgents.map((agent: { id: string; name: string | null; email: string }) => (
                     <div
                       key={agent.id}
                       className="p-3 rounded border border-zinc-900 bg-zinc-950/30 text-xs space-y-1"
