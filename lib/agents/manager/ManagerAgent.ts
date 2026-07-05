@@ -50,7 +50,12 @@ export class ManagerAgent {
             throw new Error(`Inventory stock check failed: ${stockResult.errors?.join(", ")}`)
           }
 
-          const { needsReplenishment, name, price, productId } = stockResult.output
+          const { needsReplenishment, name, price, productId } = stockResult.output as {
+            needsReplenishment: boolean
+            name: string
+            price: unknown
+            productId: string
+          }
           if (!needsReplenishment) {
             log(`Product "${name}" is healthy. No replenishment needed. Concluding workflow.`)
             return {
@@ -83,7 +88,10 @@ export class ManagerAgent {
             throw new Error(`Supplier matching failed: ${supplierResult.errors?.join(", ")}`)
           }
 
-          const { found, supplier } = supplierResult.output
+          const { found, supplier } = supplierResult.output as {
+            found: boolean
+            supplier?: { id: string; name: string }
+          }
           if (!found || !supplier) {
             throw new Error(`Primary supplier not configured or found for SKU "${sku}".`)
           }
@@ -112,7 +120,7 @@ export class ManagerAgent {
             throw new Error(`Procurement draft PO failed: ${draftResult.errors?.join(", ")}`)
           }
 
-          const { purchaseOrderId } = draftResult.output
+          const { purchaseOrderId } = draftResult.output as { purchaseOrderId: string }
           
           // Step 4: Approve PO
           log(`Step 4: PO drafted successfully. Dispatching APPROVE_PO to ProcurementAgent for ID: ${purchaseOrderId}`)
