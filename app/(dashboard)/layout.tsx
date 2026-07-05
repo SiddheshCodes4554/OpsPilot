@@ -1,14 +1,17 @@
 import React from "react"
 import Link from "next/link"
-import { LayoutDashboard, Users, Settings, Activity, LogIn } from "lucide-react"
+import { LayoutDashboard, Users, Settings, Activity } from "lucide-react"
+import { UserButton } from "@clerk/nextjs"
+import { currentUser } from "@clerk/nextjs/server"
 
-export default function DashboardLayout({
+export default async function DashboardLayout({
   children,
 }: {
   children: React.ReactNode
 }) {
+  const user = await currentUser()
   const navItems = [
-    { label: "Dashboard", href: "/", icon: LayoutDashboard },
+    { label: "Dashboard", href: "/dashboard", icon: LayoutDashboard },
     { label: "Workforce", href: "#", icon: Users },
     { label: "Operations", href: "#", icon: Activity },
     { label: "Settings", href: "#", icon: Settings },
@@ -24,9 +27,9 @@ export default function DashboardLayout({
             <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-zinc-900 text-white dark:bg-white dark:text-zinc-950 font-bold text-lg shadow-sm">
               O
             </div>
-            <span className="font-bold text-lg tracking-tight text-zinc-900 dark:text-zinc-50">
+            <Link href="/" className="font-bold text-lg tracking-tight text-zinc-900 dark:text-zinc-50 hover:opacity-90">
               OpsPilot AI
-            </span>
+            </Link>
           </div>
 
           {/* Navigation Links */}
@@ -43,27 +46,24 @@ export default function DashboardLayout({
             ))}
           </nav>
 
-          {/* Footer profile mockup */}
+          {/* Footer profile / Clerk integration */}
           <div className="p-4 border-t border-zinc-100 dark:border-zinc-900">
             <div className="flex items-center gap-3">
-              <div className="w-9 h-9 rounded-full bg-indigo-500/10 text-indigo-650 dark:text-indigo-400 flex items-center justify-center font-semibold text-sm">
-                JD
-              </div>
+              <UserButton
+                appearance={{
+                  elements: {
+                    userButtonAvatarBox: "h-9 w-9"
+                  }
+                }}
+              />
               <div className="flex-1 min-w-0">
                 <p className="text-xs font-semibold text-zinc-800 dark:text-zinc-200 truncate">
-                  John Doe
+                  {user?.fullName || `${user?.firstName || ""} ${user?.lastName || ""}`.trim() || "User"}
                 </p>
                 <p className="text-[10px] text-zinc-400 truncate">
-                  admin@opspilot.ai
+                  {user?.emailAddresses[0]?.emailAddress || "Guest User"}
                 </p>
               </div>
-              <Link
-                href="/login"
-                title="Sign In Screen"
-                className="p-1.5 rounded-lg text-zinc-400 hover:text-zinc-900 hover:bg-zinc-50 dark:hover:bg-zinc-900 dark:hover:text-zinc-50 transition-colors"
-              >
-                <LogIn className="h-4.5 w-4.5" />
-              </Link>
             </div>
           </div>
         </div>
@@ -77,17 +77,13 @@ export default function DashboardLayout({
             <div className="flex h-7 w-7 items-center justify-center rounded-lg bg-zinc-900 text-white dark:bg-white dark:text-zinc-950 font-bold text-sm">
               O
             </div>
-            <span className="font-bold text-sm tracking-tight text-zinc-900 dark:text-zinc-50">
+            <Link href="/" className="font-bold text-sm tracking-tight text-zinc-900 dark:text-zinc-50 hover:opacity-90">
               OpsPilot AI
-            </span>
+            </Link>
           </div>
-          <Link
-            href="/login"
-            className="flex items-center gap-1.5 text-xs font-semibold text-zinc-650 dark:text-zinc-400 hover:text-zinc-900 dark:hover:text-zinc-50"
-          >
-            <LogIn className="h-4 w-4" />
-            Login
-          </Link>
+          <div className="flex items-center gap-2">
+            <UserButton />
+          </div>
         </header>
 
         {/* Root layout child inject */}

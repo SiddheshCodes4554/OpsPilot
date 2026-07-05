@@ -18,7 +18,7 @@ export default function LandingPage() {
           </span>
         </div>
         <div className="flex items-center gap-4">
-          <Link href="/login">
+          <Link href="/sign-in">
             <Button variant="ghost" size="sm" className="font-medium cursor-pointer">
               Sign In
             </Button>
@@ -57,9 +57,9 @@ export default function LandingPage() {
               <ArrowRight className="h-4 w-4" />
             </Button>
           </Link>
-          <Link href="/login">
+          <Link href="/sign-in">
             <Button size="lg" variant="outline" className="h-12 px-6 font-semibold cursor-pointer">
-              Sign In Screen Mockup
+              Get Started
             </Button>
           </Link>
         </div>
