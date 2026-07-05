@@ -1,5 +1,6 @@
 import "dotenv/config"
 import { ManagerAgent } from "../lib/agents/manager/ManagerAgent"
+import { prisma } from "../lib/prisma"
 
 async function testAgents() {
   const manager = new ManagerAgent()
@@ -32,6 +33,15 @@ async function testAgents() {
   console.log("-----------------------------------------\n")
 
   // --- Task 2: Replenishment Workflow ---
+  console.log("🔧 Forcing stock level below threshold for SONYWH1000XM5 to trigger replenishment...")
+  const targetProduct = await prisma.product.findUnique({ where: { sku: "SONYWH1000XM5" } })
+  if (targetProduct) {
+    await prisma.inventory.update({
+      where: { productId: targetProduct.id },
+      data: { quantity: 2 },
+    })
+  }
+
   console.log("🏁 Triggering Replenishment Workflow (SKU: SONYWH1000XM5)...")
   const replenishmentTask = {
     id: "task-replenishment-1",

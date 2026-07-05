@@ -68,12 +68,10 @@ export class ManagerAgent {
             throw new Error(`Inventory stock check failed: ${stockResult.errors?.join(", ")}`)
           }
 
-          const { reorder, recommendedQuantity, name, price, productId } = stockResult.output as {
+          const { reorder, recommendedQuantity, name } = stockResult.output as {
             reorder: boolean
             recommendedQuantity: number
             name: string
-            price: unknown
-            productId: string
           }
           if (!reorder) {
             log(`Product "${name}" is healthy. No replenishment needed. Concluding workflow.`)
@@ -91,84 +89,32 @@ export class ManagerAgent {
             return result
           }
 
-          // Step 2: Get supplier details
-          log(`Step 2: Replenishment needed. Querying SupplierAgent for product: ${sku}`)
-          const supplierResult = await this.supplierAgent.execute(
+          // Step 2: Dispatch DRAFT_PO to ProcurementAgent
+          log(`Step 2: Replenishment needed. Dispatching DRAFT_PO to ProcurementAgent for SKU: "${sku}"`)
+          const procurementResult = await this.procurementAgent.execute(
             {
               id: `${task.id}-step2`,
-              type: "GET_SUPPLIER_FOR_PRODUCT",
-              description: `Getting supplier for product ID ${productId}`,
-              input: { productId },
-              createdAt: new Date(),
-            },
-            context
-          )
-          logs.push(...supplierResult.logs)
-
-          if (supplierResult.status === "FAILURE") {
-            throw new Error(`Supplier matching failed: ${supplierResult.errors?.join(", ")}`)
-          }
-
-          const { found, supplier } = supplierResult.output as {
-            found: boolean
-            supplier?: { id: string; name: string }
-          }
-          if (!found || !supplier) {
-            throw new Error(`Primary supplier not configured or found for SKU "${sku}".`)
-          }
-
-          // Step 3: Draft PO
-          log(`Step 3: Supplier found: "${supplier.name}". Dispatching DRAFT_PO to ProcurementAgent.`)
-          const draftResult = await this.procurementAgent.execute(
-            {
-              id: `${task.id}-step3`,
               type: "DRAFT_PO",
-              description: `Drafting replenishment PO with ${supplier.name}`,
+              description: `Drafting replenishment PO for SKU: ${sku}`,
               input: {
-                supplierId: supplier.id,
-                productId,
+                sku,
                 quantity: recommendedQuantity || quantity,
-                unitPrice: price,
-                etaDays: 5,
               },
               createdAt: new Date(),
             },
             context
           )
-          logs.push(...draftResult.logs)
+          logs.push(...procurementResult.logs)
 
-          if (draftResult.status === "FAILURE") {
-            throw new Error(`Procurement draft PO failed: ${draftResult.errors?.join(", ")}`)
+          if (procurementResult.status === "FAILURE") {
+            throw new Error(`Procurement draft PO failed: ${procurementResult.errors?.join(", ")}`)
           }
 
-          const { purchaseOrderId } = draftResult.output as { purchaseOrderId: string }
-          
-          // Step 4: Approve PO
-          log(`Step 4: PO drafted successfully. Dispatching APPROVE_PO to ProcurementAgent for ID: ${purchaseOrderId}`)
-          const approveResult = await this.procurementAgent.execute(
-            {
-              id: `${task.id}-step4`,
-              type: "APPROVE_PO",
-              description: `Approving PO ${purchaseOrderId}`,
-              input: {
-                purchaseOrderId,
-                comments: "System auto-replenishment triggered and approved.",
-              },
-              createdAt: new Date(),
-            },
-            context
-          )
-          logs.push(...approveResult.logs)
-
-          if (approveResult.status === "FAILURE") {
-            throw new Error(`Procurement PO approval failed: ${approveResult.errors?.join(", ")}`)
-          }
-
-          // Step 5: Get updated snapshot metrics
-          log(`Step 5: Purchase Order completed. Dispatching GET_SNAPSHOT to AnalyticsAgent.`)
+          // Step 3: Get updated snapshot metrics
+          log(`Step 3: Purchase Order drafted. Dispatching GET_SNAPSHOT to AnalyticsAgent.`)
           const analyticsResult = await this.analyticsAgent.execute(
             {
-              id: `${task.id}-step5`,
+              id: `${task.id}-step3`,
               type: "GET_SNAPSHOT",
               description: "Getting ledger overview snapshot",
               input: {},
@@ -185,9 +131,8 @@ export class ManagerAgent {
             output: {
               workflowCompleted: true,
               replenishmentTriggered: true,
-              stockDetails: stockResult.output,
-              supplierDetails: supplier.name,
-              purchaseOrderDetails: approveResult.output,
+              stockCheck: stockResult.output,
+              procurement: procurementResult.output,
               businessSnapshot: analyticsResult.output,
             },
             logs,
