@@ -3,7 +3,6 @@ import { UserButton } from "@clerk/nextjs"
 import { currentUser } from "@clerk/nextjs/server"
 import { DashboardShell } from "@/components/layout/DashboardShell"
 import { Sidebar } from "@/components/layout/Sidebar"
-import { ActivityPanel } from "@/components/layout/ActivityPanel"
 
 export default async function DashboardLayout({
   children,
@@ -17,6 +16,9 @@ export default async function DashboardLayout({
       title: "Workspace",
       items: [
         { label: "Dashboard", href: "/dashboard", icon: "dashboard" },
+        { label: "Inbox", href: "/inbox", icon: "inbox" },
+        { label: "Inventory", href: "/inventory", icon: "inventory" },
+        { label: "Procurement", href: "/procurement", icon: "procurement" },
         { label: "Workforce", href: "#", icon: "users", badge: "3" },
         { label: "Operations", href: "#", icon: "activity" },
       ],
@@ -62,33 +64,11 @@ export default async function DashboardLayout({
     </div>
   )
 
-  const activityPanel = (
-    <ActivityPanel title="Workspace Logs">
-      <div className="space-y-3">
-        <div className="p-3 rounded border border-zinc-900 bg-zinc-950 text-xs space-y-1">
-          <div className="flex items-center justify-between">
-            <span className="font-medium text-zinc-300">System Boot</span>
-            <span className="text-[10px] text-zinc-600">Just now</span>
-          </div>
-          <p className="text-[11px] text-zinc-500 leading-relaxed">Core workforce services initialized.</p>
-        </div>
-        <div className="p-3 rounded border border-zinc-900 bg-zinc-950 text-xs space-y-1">
-          <div className="flex items-center justify-between">
-            <span className="font-medium text-zinc-300">Workspace Sync</span>
-            <span className="text-[10px] text-zinc-600">10m ago</span>
-          </div>
-          <p className="text-[11px] text-zinc-500 leading-relaxed">Schema synced with remote registry.</p>
-        </div>
-      </div>
-    </ActivityPanel>
-  )
-
   return (
     <DashboardShell
       sidebar={sidebar}
       breadcrumbs={breadcrumbs}
       navbarActions={navbarActions}
-      activityPanel={activityPanel}
     >
       {children}
     </DashboardShell>

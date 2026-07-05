@@ -1,4 +1,4 @@
-import { PrismaClient, Product, Customer, Supplier } from "@prisma/client"
+import { PrismaClient, Product, Customer, Supplier, EmailStatus, EmailPriority, PurchaseOrderStatus } from "@prisma/client"
 import { PrismaPg } from "@prisma/adapter-pg"
 import pg from "pg"
 
@@ -90,7 +90,28 @@ async function main() {
 
   const seededProducts: Product[] = []
   for (const p of products) {
-    const product = await prisma.product.create({ data: p })
+    let supplierIndex = 0
+    if (p.sku === "IPHONE15PRO" || p.sku === "SAMSUNGS24U") {
+      supplierIndex = 2 // ElectroSource
+    } else if (p.sku === "MACBOOKPRO14M3" || p.sku === "IPADAIRM1") {
+      supplierIndex = 0 // Apex
+    } else if (p.sku === "SONYWH1000XM5" || p.sku === "BOSEQCII") {
+      supplierIndex = 3 // Horizon
+    } else if (p.sku === "DELLU2723QE") {
+      supplierIndex = 1 // ByteSize
+    } else {
+      supplierIndex = 4 // Synergy
+    }
+
+    const product = await prisma.product.create({
+      data: {
+        sku: p.sku,
+        name: p.name,
+        description: p.description,
+        price: p.price,
+        supplier: { connect: { id: seededSuppliers[supplierIndex].id } },
+      },
+    })
     seededProducts.push(product)
   }
 
@@ -180,6 +201,79 @@ async function main() {
     })
   }
 
+  console.log("🚚 Seeding Purchase Orders...")
+  const poData = [
+    {
+      supplierId: seededSuppliers[0].id, // Apex
+      status: "DRAFT",
+      totalAmount: 1800.00,
+      eta: null,
+      items: [
+        { productId: seededProducts[1].id, quantity: 1, unitPrice: 1799.99 } // MacBook Pro
+      ]
+    },
+    {
+      supplierId: seededSuppliers[2].id, // ElectroSource
+      status: "PENDING",
+      totalAmount: 2399.98,
+      eta: new Date(Date.now() + 5 * 24 * 60 * 60 * 1000), // 5 days from now
+      items: [
+        { productId: seededProducts[0].id, quantity: 2, unitPrice: 1199.99 } // iPhone 15 Pro
+      ]
+    },
+    {
+      supplierId: seededSuppliers[4].id, // Synergy
+      status: "APPROVED",
+      totalAmount: 499.95,
+      eta: new Date(Date.now() + 3 * 24 * 60 * 60 * 1000), // 3 days from now
+      items: [
+        { productId: seededProducts[4].id, quantity: 5, unitPrice: 99.99 } // Logitech MX Master
+      ]
+    },
+    {
+      supplierId: seededSuppliers[1].id, // ByteSize
+      status: "ORDERED",
+      totalAmount: 959.98,
+      eta: new Date(Date.now() + 2 * 24 * 60 * 60 * 1000), // 2 days from now
+      items: [
+        { productId: seededProducts[3].id, quantity: 2, unitPrice: 479.99 } // Dell Monitor
+      ]
+    },
+    {
+      supplierId: seededSuppliers[3].id, // Horizon
+      status: "DELIVERED",
+      totalAmount: 1749.95,
+      eta: new Date(Date.now() - 1 * 24 * 60 * 60 * 1000), // Yesterday
+      items: [
+        { productId: seededProducts[2].id, quantity: 5, unitPrice: 349.99 } // Sony WH-1000XM5
+      ]
+    },
+    {
+      supplierId: seededSuppliers[0].id, // Apex
+      status: "ORDERED",
+      totalAmount: 3599.94,
+      eta: new Date(Date.now() + 4 * 24 * 60 * 60 * 1000), // 4 days from now
+      items: [
+        { productId: seededProducts[1].id, quantity: 2, unitPrice: 1799.99 } // MacBook Pro
+      ]
+    }
+  ]
+
+  for (const po of poData) {
+    await prisma.purchaseOrder.create({
+      data: {
+        supplierId: po.supplierId,
+        userId: admin.id,
+        status: po.status as PurchaseOrderStatus,
+        totalAmount: po.totalAmount,
+        eta: po.eta,
+        items: {
+          create: po.items
+        }
+      }
+    })
+  }
+
   console.log("🔔 Seeding Notifications...")
   const notifications = [
     { title: "Low Stock Warning", content: "SKU: SONYWH1000XM5 has fallen below the minimum stock level of 10. Current quantity: 3." },
@@ -197,6 +291,97 @@ async function main() {
         title: n.title,
         content: n.content,
         isRead: false,
+      },
+    })
+  }
+
+  console.log("📧 Seeding Emails...")
+  const emails = [
+    {
+      customerId: seededCustomers[0].id, // Alice Smith
+      subject: "Cracked screen on Dell UltraSharp monitor",
+      body: "Hi Support,\n\nI received my Dell UltraSharp 27\" monitor today, but upon opening the box I noticed the screen is cracked in the bottom-left corner. I would like a replacement sent out immediately. Please let me know how to return this unit.\n\nBest,\nAlice",
+      status: "RECEIVED",
+      priority: "HIGH",
+      sender: "alice.smith@gmail.com",
+      recipient: "support@opspilot.ai",
+    },
+    {
+      customerId: seededCustomers[1].id, // Bob Johnson
+      subject: "MacBook Pro M3 warranty confirmation",
+      body: "Hello, I purchased the MacBook Pro 14 M3 last week and wanted to verify if it qualifies for AppleCare coverage under your retail policy, or if I need to purchase it directly from Apple. Thanks.\n\nBob",
+      status: "RECEIVED",
+      priority: "MEDIUM",
+      sender: "bob.johnson@outlook.com",
+      recipient: "support@opspilot.ai",
+    },
+    {
+      customerId: seededCustomers[4].id, // Evan Wright
+      subject: "Bulk order inquiry: Keychron K2 keyboards",
+      body: "Hi Sales team,\n\nWe are looking to equip our new engineering office with Keychron K2 mechanical keyboards. Do you have 20 units in stock, and do you offer any volume discounts for corporate accounts?\n\nRegards,\nEvan Wright",
+      status: "RECEIVED",
+      priority: "LOW",
+      sender: "evan.wright@wrightinc.com",
+      recipient: "sales@opspilot.ai",
+    },
+    {
+      customerId: seededCustomers[5].id, // Fiona Gallagher
+      subject: "URGENT: Wrong items delivered in order",
+      body: "Hey, I ordered a pair of Bose QuietComfort earbuds but instead got an Anker power bank. This was meant to be a birthday gift for tomorrow! Can someone please help me get the right item?\n\nFiona",
+      status: "RECEIVED",
+      priority: "HIGH",
+      sender: "fiona.g@gallaghers.com",
+      recipient: "support@opspilot.ai",
+    },
+    {
+      customerId: seededCustomers[6].id, // George Costanza
+      subject: "Change shipping address for order #408",
+      body: "Dear support, I need to update the delivery address for my recent purchase immediately. It should be sent to Vandelay Industries, not my home address. Please confirm the change.\n\nGeorge",
+      status: "RECEIVED",
+      priority: "HIGH",
+      sender: "george@vandelayindustries.com",
+      recipient: "support@opspilot.ai",
+    },
+    {
+      customerId: seededCustomers[3].id, // Diana Prince
+      subject: "Invoice request for iPad Air M1",
+      body: "Hello, I require a detailed corporate tax invoice for my purchase of the iPad Air M1. Could you please email a PDF receipt to this address? Thank you.\n\nDiana",
+      status: "RECEIVED",
+      priority: "MEDIUM",
+      sender: "diana@themyscira.org",
+      recipient: "billing@opspilot.ai",
+    },
+    {
+      customerId: seededCustomers[13].id, // Natalie Portman
+      subject: "Sony WH-1000XM5 stock inquiry",
+      body: "Hi, your website lists the Sony WH-1000XM5 headphones as low stock. I would like to purchase one in silver. Do you have any silver units available in your main warehouse?\n\nNatalie",
+      status: "RECEIVED",
+      priority: "LOW",
+      sender: "natalie@portmantheatre.org",
+      recipient: "sales@opspilot.ai",
+    },
+    {
+      customerId: seededCustomers[2].id, // Charlie Davis
+      subject: "Draft Response: Shipping details update",
+      body: "Hi Charlie, we have received your request and are updating your tracking link details now.",
+      status: "DRAFT",
+      priority: "LOW",
+      sender: "support-agent@opspilot.ai",
+      recipient: "charlie.d@yahoo.com",
+    },
+  ]
+
+  for (const e of emails) {
+    // Explicitly cast to satisfy Prisma 7 enum typing
+    await prisma.email.create({
+      data: {
+        subject: e.subject,
+        body: e.body,
+        status: e.status as EmailStatus,
+        priority: e.priority as EmailPriority,
+        sender: e.sender,
+        recipient: e.recipient,
+        customer: e.customerId ? { connect: { id: e.customerId } } : undefined,
       },
     })
   }
