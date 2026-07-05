@@ -1,28 +1,30 @@
-import { Task, AgentResult, AgentContext, ExecutionLog } from "../shared/types"
-import { CustomerAgent } from "../customer/CustomerAgent"
-import { InventoryAgent } from "../inventory/InventoryAgent"
-import { ProcurementAgent } from "../procurement/ProcurementAgent"
-import { SupplierAgent } from "../supplier/SupplierAgent"
-import { AnalyticsAgent } from "../analytics/AnalyticsAgent"
+import { Task, AgentResult, AgentContext, ExecutionLog, IAgent } from "../shared/types"
 import { IAgentLogger } from "../../logger/types"
 import { AgentLogger } from "../../logger/AgentLogger"
 
-export class ManagerAgent {
+export class ManagerAgent implements IAgent {
   private agentName = "ManagerAgent"
   private logger: IAgentLogger
-  private customerAgent: CustomerAgent
-  private inventoryAgent: InventoryAgent
-  private procurementAgent: ProcurementAgent
-  private supplierAgent: SupplierAgent
-  private analyticsAgent: AnalyticsAgent
+  private customerAgent: IAgent
+  private inventoryAgent: IAgent
+  private procurementAgent: IAgent
+  private supplierAgent: IAgent
+  private analyticsAgent: IAgent
 
-  constructor(logger?: IAgentLogger) {
+  constructor(
+    customerAgent: IAgent,
+    inventoryAgent: IAgent,
+    procurementAgent: IAgent,
+    supplierAgent: IAgent,
+    analyticsAgent: IAgent,
+    logger?: IAgentLogger
+  ) {
+    this.customerAgent = customerAgent
+    this.inventoryAgent = inventoryAgent
+    this.procurementAgent = procurementAgent
+    this.supplierAgent = supplierAgent
+    this.analyticsAgent = analyticsAgent
     this.logger = logger ?? AgentLogger.getInstance()
-    this.customerAgent = new CustomerAgent(this.logger)
-    this.inventoryAgent = new InventoryAgent(this.logger)
-    this.procurementAgent = new ProcurementAgent(this.logger)
-    this.supplierAgent = new SupplierAgent(this.logger)
-    this.analyticsAgent = new AnalyticsAgent(this.logger)
   }
 
   /**
@@ -46,11 +48,11 @@ export class ManagerAgent {
       switch (task.type) {
         case "REPLENISHMENT_WORKFLOW": {
           const { sku, quantity } = task.input as { sku?: string; quantity?: number }
-          if (!sku || !quantity) {
+          if (!sku || quantity === undefined) {
             throw new Error("Missing required inputs (sku, quantity) for REPLENISHMENT_WORKFLOW.")
           }
 
-          // Step 1: Stock check check
+          // Step 1: Stock check
           log(`Step 1: Dispatching STOCK_CHECK to InventoryAgent for SKU: "${sku}"`)
           const stockResult = await this.inventoryAgent.execute(
             {

@@ -40,3 +40,7 @@ export interface AgentContext {
   sessionId: string       // Trace session id
   metadata?: Record<string, unknown>
 }
+
+export interface IAgent {
+  execute(task: Task, context: AgentContext): Promise<AgentResult>
+}

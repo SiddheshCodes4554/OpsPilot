@@ -1,9 +1,26 @@
 import "dotenv/config"
 import { ManagerAgent } from "../lib/agents/manager/ManagerAgent"
+import { CustomerAgent } from "../lib/agents/customer/CustomerAgent"
+import { InventoryAgent } from "../lib/agents/inventory/InventoryAgent"
+import { ProcurementAgent } from "../lib/agents/procurement/ProcurementAgent"
+import { SupplierAgent } from "../lib/agents/supplier/SupplierAgent"
+import { AnalyticsAgent } from "../lib/agents/analytics/AnalyticsAgent"
 import { prisma } from "../lib/prisma"
 
 async function testAgents() {
-  const manager = new ManagerAgent()
+  const customerAgent = new CustomerAgent()
+  const inventoryAgent = new InventoryAgent()
+  const procurementAgent = new ProcurementAgent()
+  const supplierAgent = new SupplierAgent()
+  const analyticsAgent = new AnalyticsAgent()
+
+  const manager = new ManagerAgent(
+    customerAgent,
+    inventoryAgent,
+    procurementAgent,
+    supplierAgent,
+    analyticsAgent
+  )
   const sessionId = `session-${Date.now()}`
   const context = { sessionId, userId: "test-user-id" }
 

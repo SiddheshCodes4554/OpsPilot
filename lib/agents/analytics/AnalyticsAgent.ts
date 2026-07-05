@@ -1,18 +1,27 @@
 import { prisma } from "@/lib/prisma"
-import { Task, AgentResult, AgentContext, ExecutionLog } from "../shared/types"
+import { Task, AgentResult, AgentContext, ExecutionLog, IAgent } from "../shared/types"
 import { IAgentLogger } from "../../logger/types"
 import { AgentLogger } from "../../logger/AgentLogger"
+import { GroqService } from "../../ai/GroqService"
+import {
+  ANALYTICS_SUMMARY_SYSTEM_PROMPT,
+  ANALYTICS_SUMMARY_USER_TEMPLATE,
+  ANALYTICS_SUMMARY_SCHEMA,
+} from "../../prompts/analytics"
 
-export class AnalyticsAgent {
+export class AnalyticsAgent implements IAgent {
   private agentName = "AnalyticsAgent"
   private logger: IAgentLogger
+  private groqService: GroqService
 
   constructor(logger?: IAgentLogger) {
     this.logger = logger ?? AgentLogger.getInstance()
+    this.groqService = GroqService.getInstance()
   }
 
   /**
-   * Executes analytics compilation and audit tasks.
+   * Executes business data analytics summary using Groq and the Prompt Engine.
+   * Compiles sales numbers, inventory levels, and procurement pipelines.
    */
   async execute(task: Task, context: AgentContext): Promise<AgentResult> {
     const logs: ExecutionLog[] = []
@@ -26,104 +35,133 @@ export class AnalyticsAgent {
       task.input as Record<string, unknown>
     )
 
-    log(`Received analytics task: "${task.type}" - "${task.description}" (Session: ${context.sessionId})`)
+    log(`Received analytics compilation task (Session: ${context.sessionId})`)
 
     try {
-      switch (task.type) {
-        case "GET_SNAPSHOT": {
-          log("Compiling real-time business metrics snapshot...")
-          const [
-            productCount,
-            customerCount,
-            supplierCount,
-            allOrders,
-          ] = await Promise.all([
-            prisma.product.count(),
-            prisma.customer.count(),
-            prisma.supplier.count(),
-            prisma.order.findMany({ select: { totalAmount: true } }),
-          ])
+      // Extract optional pre-calculated counts or pull dynamically from Prisma
+      const inputData = task.input as {
+        totalOrdersCount?: number
+        totalSalesVolume?: number
+        averageOrderValue?: number
+        totalProductsCount?: number
+        lowStockProductsCount?: number
+        totalPurchaseOrdersCount?: number
+        pendingPurchaseOrdersCount?: number
+        riskFactorsText?: string
+      }
 
-          const totalSales = allOrders.reduce((sum, order) => sum + Number(order.totalAmount), 0)
+      let totalOrdersCount = inputData.totalOrdersCount
+      let totalSalesVolume = inputData.totalSalesVolume
+      let averageOrderValue = inputData.averageOrderValue
+      let totalProductsCount = inputData.totalProductsCount
+      let lowStockProductsCount = inputData.lowStockProductsCount
+      let totalPurchaseOrdersCount = inputData.totalPurchaseOrdersCount
+      let pendingPurchaseOrdersCount = inputData.pendingPurchaseOrdersCount
+      let riskFactorsText = inputData.riskFactorsText ?? ""
 
-          log(`Snapshot metrics compiled. Total Products: ${productCount}, Customers: ${customerCount}, Sales: $${totalSales.toFixed(2)}`)
-          const result: AgentResult = {
-            agentName: this.agentName,
-            status: "SUCCESS",
-            output: {
-              totalSales,
-              productCount,
-              supplierCount,
-              customerCount,
-              orderCount: allOrders.length,
-            },
-            logs,
-          }
-          this.logger.logSuccess(executionId, 1.0, result.output)
-          return result
-        }
+      // Dynamically compile from database if any metric is missing
+      if (
+        totalOrdersCount === undefined ||
+        totalSalesVolume === undefined ||
+        lowStockProductsCount === undefined
+      ) {
+        log(`Compiling live metrics from database tables...`)
 
-        case "RUN_ORDER_AUDIT": {
-          log("Auditing active customer sales order ledger...")
-          const orders = await prisma.order.findMany({
-            include: {
-              customer: true,
-              items: {
-                include: {
-                  product: true,
-                },
+        const [
+          dbProductCount,
+          dbLowStockCount,
+          dbOrderCount,
+          dbAllOrders,
+          dbPoCount,
+          dbPendingPoCount,
+        ] = await Promise.all([
+          prisma.product.count(),
+          prisma.inventory.count({
+            where: {
+              quantity: {
+                lte: prisma.inventory.fields.minStockLevel,
               },
             },
-          })
-
-          const totalOrders = orders.length
-          if (totalOrders === 0) {
-            log("No sales orders available for audit.", "WARN")
-            const result: AgentResult = {
-              agentName: this.agentName,
-              status: "SUCCESS",
-              output: { audited: 0, highValueOrders: [] },
-              logs,
-            }
-            this.logger.logSuccess(executionId, 1.0, result.output)
-            return result
-          }
-
-          const sumSales = orders.reduce((sum, o) => sum + Number(o.totalAmount), 0)
-          const avgOrderValue = sumSales / totalOrders
-
-          // Identify orders above $1,000 threshold
-          const highValueOrders = orders
-            .filter((o) => Number(o.totalAmount) >= 1000)
-            .map((o) => ({
-              orderId: o.id,
-              customerName: o.customer.name,
-              totalAmount: o.totalAmount,
-              status: o.status,
-            }))
-
-          log(`Audited ${totalOrders} orders. Average order size: $${avgOrderValue.toFixed(2)}. Flagged ${highValueOrders.length} high-value orders.`)
-          const result: AgentResult = {
-            agentName: this.agentName,
-            status: "SUCCESS",
-            output: {
-              audited: totalOrders,
-              totalSales: sumSales,
-              avgOrderValue,
-              highValueOrders,
+          }),
+          prisma.order.count(),
+          prisma.order.findMany({ select: { totalAmount: true } }),
+          prisma.purchaseOrder.count(),
+          prisma.purchaseOrder.count({
+            where: {
+              status: "PENDING",
             },
-            logs,
-          }
-          this.logger.logSuccess(executionId, 1.0, result.output)
-          return result
-        }
+          }),
+        ])
 
-        default:
-          throw new Error(`Unsupported task type "${task.type}" for AnalyticsAgent.`)
+        totalProductsCount = dbProductCount
+        lowStockProductsCount = dbLowStockCount
+        totalOrdersCount = dbOrderCount
+        totalSalesVolume = dbAllOrders.reduce((sum, order) => sum + Number(order.totalAmount), 0)
+        averageOrderValue = totalOrdersCount > 0 ? totalSalesVolume / totalOrdersCount : 0
+        totalPurchaseOrdersCount = dbPoCount
+        pendingPurchaseOrdersCount = dbPendingPoCount
+
+        // Compile details on risk factors
+        const lowStockItems = await prisma.product.findMany({
+          where: {
+            inventory: {
+              quantity: {
+                lte: prisma.inventory.fields.minStockLevel,
+              },
+            },
+          },
+          select: { name: true, sku: true },
+          take: 3,
+        })
+
+        const itemNames = lowStockItems.map((item) => `${item.name} (${item.sku})`).join(", ")
+        riskFactorsText = `${lowStockProductsCount} items remain below reorder levels (${
+          itemNames || "none currently"
+        }). ${pendingPurchaseOrdersCount} POs are pending approval.`
       }
+
+      log(`Operational dataset assembled. Preparing prompts for Groq summarization...`)
+
+      const messages = [
+        { role: "system" as const, content: ANALYTICS_SUMMARY_SYSTEM_PROMPT },
+        {
+          role: "user" as const,
+          content: ANALYTICS_SUMMARY_USER_TEMPLATE({
+            totalOrdersCount,
+            totalSalesVolume,
+            averageOrderValue: averageOrderValue ?? 0,
+            totalProductsCount: totalProductsCount ?? 0,
+            lowStockProductsCount: lowStockProductsCount ?? 0,
+            totalPurchaseOrdersCount: totalPurchaseOrdersCount ?? 0,
+            pendingPurchaseOrdersCount: pendingPurchaseOrdersCount ?? 0,
+            riskFactorsText,
+          }),
+        },
+      ]
+
+      log(`Invoking Groq service for structured snapshot generation...`)
+
+      // Execute AI generation and Zod schema parsing
+      const summary = await this.groqService.chatStructured(
+        messages,
+        ANALYTICS_SUMMARY_SCHEMA,
+        { temperature: 0.2 }
+      )
+
+      log(`Operational summary compiled successfully. Risk Rating: "${summary.riskLevel}"`)
+
+      const result: AgentResult = {
+        agentName: this.agentName,
+        status: "SUCCESS",
+        output: summary as unknown as Record<string, unknown>,
+        logs,
+      }
+
+      this.logger.logSuccess(executionId, summary.confidence, result.output)
+      return result
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err)
-      log(`Execution failed: ${message}`, "ERROR")
+      log(`Analytics compilation failed: ${message}`, "ERROR")
       this.logger.logFailure(executionId, err instanceof Error ? err : message)
       return {
         agentName: this.agentName,

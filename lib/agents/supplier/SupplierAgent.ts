@@ -1,10 +1,10 @@
-import { Task, AgentResult, AgentContext, ExecutionLog } from "../shared/types"
+import { Task, AgentResult, AgentContext, ExecutionLog, IAgent } from "../shared/types"
 import { IAgentLogger } from "../../logger/types"
 import { AgentLogger } from "../../logger/AgentLogger"
 import { GroqService } from "../../ai/GroqService"
 import { REPLY_PARSER_SYSTEM_PROMPT, REPLY_PARSER_USER_TEMPLATE, REPLY_PARSER_SCHEMA } from "../../prompts/supplier"
 
-export class SupplierAgent {
+export class SupplierAgent implements IAgent {
   private agentName = "SupplierAgent"
   private logger: IAgentLogger
   private groqService: GroqService

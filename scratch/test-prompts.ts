@@ -2,7 +2,7 @@ import { EXAMPLES as customerExamples, OUTPUT_SCHEMA as customerSchema, USER_PRO
 import { EXAMPLES as inventoryExamples, OUTPUT_SCHEMA as inventorySchema, USER_PROMPT_TEMPLATE as inventoryTemplate, METADATA as inventoryMeta } from "../lib/prompts/inventory"
 import { EXAMPLES as procurementExamples, OUTPUT_SCHEMA as procurementSchema, USER_PROMPT_TEMPLATE as procurementTemplate, METADATA as procurementMeta, EMAIL_DRAFT_EXAMPLES, EMAIL_DRAFT_SCHEMA, EMAIL_DRAFT_USER_TEMPLATE } from "../lib/prompts/procurement"
 import { EXAMPLES as supplierExamples, OUTPUT_SCHEMA as supplierSchema, USER_PROMPT_TEMPLATE as supplierTemplate, METADATA as supplierMeta, REPLY_PARSER_EXAMPLES, REPLY_PARSER_SCHEMA, REPLY_PARSER_USER_TEMPLATE } from "../lib/prompts/supplier"
-import { EXAMPLES as analyticsExamples, OUTPUT_SCHEMA as analyticsSchema, USER_PROMPT_TEMPLATE as analyticsTemplate, METADATA as analyticsMeta } from "../lib/prompts/analytics"
+import { EXAMPLES as analyticsExamples, OUTPUT_SCHEMA as analyticsSchema, USER_PROMPT_TEMPLATE as analyticsTemplate, METADATA as analyticsMeta, ANALYTICS_SUMMARY_EXAMPLES, ANALYTICS_SUMMARY_SCHEMA, ANALYTICS_SUMMARY_USER_TEMPLATE } from "../lib/prompts/analytics"
 
 function testPrompts() {
   console.log("=========================================")
@@ -82,6 +82,17 @@ function testPrompts() {
     console.log(`  """\n  ${analyticsTemplate(ex.input).replace(/\n/g, "\n  ")}\n  """`)
     // Validate output matches Zod
     analyticsSchema.parse(ex.output)
+    console.log("  ✅ Zod parsing validation passed.")
+  })
+  console.log("-----------------------------------------\n")
+
+  // --- Analytics Summary prompt test ---
+  console.log(`📋 Prompt: analytics-summary`)
+  ANALYTICS_SUMMARY_EXAMPLES.forEach((ex, i) => {
+    console.log(`  Example ${i + 1} Input Render:`)
+    console.log(`  """\n  ${ANALYTICS_SUMMARY_USER_TEMPLATE(ex.input).replace(/\n/g, "\n  ")}\n  """`)
+    // Validate output matches Zod
+    ANALYTICS_SUMMARY_SCHEMA.parse(ex.output)
     console.log("  ✅ Zod parsing validation passed.")
   })
   console.log("=========================================")

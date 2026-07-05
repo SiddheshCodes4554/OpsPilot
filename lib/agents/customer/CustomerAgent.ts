@@ -1,10 +1,10 @@
-import { Task, AgentResult, AgentContext, ExecutionLog } from "../shared/types"
+import { Task, AgentResult, AgentContext, ExecutionLog, IAgent } from "../shared/types"
 import { IAgentLogger } from "../../logger/types"
 import { AgentLogger } from "../../logger/AgentLogger"
 import { GroqService } from "../../ai/GroqService"
 import { SYSTEM_PROMPT, USER_PROMPT_TEMPLATE, OUTPUT_SCHEMA } from "../../prompts/customer"
 
-export class CustomerAgent {
+export class CustomerAgent implements IAgent {
   private agentName = "CustomerAgent"
   private logger: IAgentLogger
   private groqService: GroqService

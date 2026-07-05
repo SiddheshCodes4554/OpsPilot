@@ -1,9 +1,9 @@
 import { prisma } from "@/lib/prisma"
-import { Task, AgentResult, AgentContext, ExecutionLog } from "../shared/types"
+import { Task, AgentResult, AgentContext, ExecutionLog, IAgent } from "../shared/types"
 import { IAgentLogger } from "../../logger/types"
 import { AgentLogger } from "../../logger/AgentLogger"
 
-export class InventoryAgent {
+export class InventoryAgent implements IAgent {
   private agentName = "InventoryAgent"
   private logger: IAgentLogger
 

@@ -1,5 +1,5 @@
 import { prisma } from "@/lib/prisma"
-import { Task, AgentResult, AgentContext, ExecutionLog } from "../shared/types"
+import { Task, AgentResult, AgentContext, ExecutionLog, IAgent } from "../shared/types"
 import { PurchaseOrderStatus } from "@prisma/client"
 import { IAgentLogger } from "../../logger/types"
 import { AgentLogger } from "../../logger/AgentLogger"
@@ -10,7 +10,7 @@ import {
   EMAIL_DRAFT_SCHEMA,
 } from "../../prompts/procurement"
 
-export class ProcurementAgent {
+export class ProcurementAgent implements IAgent {
   private agentName = "ProcurementAgent"
   private logger: IAgentLogger
   private groqService: GroqService
