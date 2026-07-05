@@ -4,14 +4,26 @@ import { InventoryAgent } from "../inventory/InventoryAgent"
 import { ProcurementAgent } from "../procurement/ProcurementAgent"
 import { SupplierAgent } from "../supplier/SupplierAgent"
 import { AnalyticsAgent } from "../analytics/AnalyticsAgent"
+import { IAgentLogger } from "../../logger/types"
+import { AgentLogger } from "../../logger/AgentLogger"
 
 export class ManagerAgent {
   private agentName = "ManagerAgent"
-  private customerAgent = new CustomerAgent()
-  private inventoryAgent = new InventoryAgent()
-  private procurementAgent = new ProcurementAgent()
-  private supplierAgent = new SupplierAgent()
-  private analyticsAgent = new AnalyticsAgent()
+  private logger: IAgentLogger
+  private customerAgent: CustomerAgent
+  private inventoryAgent: InventoryAgent
+  private procurementAgent: ProcurementAgent
+  private supplierAgent: SupplierAgent
+  private analyticsAgent: AnalyticsAgent
+
+  constructor(logger?: IAgentLogger) {
+    this.logger = logger ?? AgentLogger.getInstance()
+    this.customerAgent = new CustomerAgent(this.logger)
+    this.inventoryAgent = new InventoryAgent(this.logger)
+    this.procurementAgent = new ProcurementAgent(this.logger)
+    this.supplierAgent = new SupplierAgent(this.logger)
+    this.analyticsAgent = new AnalyticsAgent(this.logger)
+  }
 
   /**
    * Orchestrates multi-agent pipelines. Coordinates specialized agents to complete workflows.
@@ -21,6 +33,12 @@ export class ManagerAgent {
     const log = (message: string, level: ExecutionLog["level"] = "INFO") => {
       logs.push({ agentName: this.agentName, level, message, timestamp: new Date() })
     }
+
+    const executionId = this.logger.logStart(
+      this.agentName,
+      task.type,
+      task.input as Record<string, unknown>
+    )
 
     log(`ManagerAgent initiated. Routing task type: "${task.type}" (Session: ${context.sessionId})`)
 
@@ -58,7 +76,7 @@ export class ManagerAgent {
           }
           if (!needsReplenishment) {
             log(`Product "${name}" is healthy. No replenishment needed. Concluding workflow.`)
-            return {
+            const result: AgentResult = {
               agentName: this.agentName,
               status: "SUCCESS",
               output: {
@@ -68,6 +86,8 @@ export class ManagerAgent {
               },
               logs,
             }
+            this.logger.logSuccess(executionId, 1.0, result.output)
+            return result
           }
 
           // Step 2: Get supplier details
@@ -158,7 +178,7 @@ export class ManagerAgent {
           logs.push(...analyticsResult.logs)
 
           log("All replenishment workflow steps executed successfully.")
-          return {
+          const result: AgentResult = {
             agentName: this.agentName,
             status: "SUCCESS",
             output: {
@@ -171,6 +191,8 @@ export class ManagerAgent {
             },
             logs,
           }
+          this.logger.logSuccess(executionId, 1.0, result.output)
+          return result
         }
 
         case "CUSTOMER_INQUIRY_WORKFLOW": {
@@ -220,7 +242,7 @@ export class ManagerAgent {
           }
 
           log("Customer inquiry workflow executed successfully.")
-          return {
+          const result: AgentResult = {
             agentName: this.agentName,
             status: "SUCCESS",
             output: {
@@ -230,6 +252,8 @@ export class ManagerAgent {
             },
             logs,
           }
+          this.logger.logSuccess(executionId, 1.0, result.output)
+          return result
         }
 
         default:
@@ -238,6 +262,7 @@ export class ManagerAgent {
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err)
       log(`Orchestration pipeline failed: ${message}`, "ERROR")
+      this.logger.logFailure(executionId, err instanceof Error ? err : message)
       return {
         agentName: this.agentName,
         status: "FAILURE",

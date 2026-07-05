@@ -1,9 +1,16 @@
 import { prisma } from "@/lib/prisma"
 import { EmailStatus, EmailPriority } from "@prisma/client"
 import { Task, AgentResult, AgentContext, ExecutionLog } from "../shared/types"
+import { IAgentLogger } from "../../logger/types"
+import { AgentLogger } from "../../logger/AgentLogger"
 
 export class CustomerAgent {
   private agentName = "CustomerAgent"
+  private logger: IAgentLogger
+
+  constructor(logger?: IAgentLogger) {
+    this.logger = logger ?? AgentLogger.getInstance()
+  }
 
   /**
    * Executes customer-related CRM operations.
@@ -13,6 +20,12 @@ export class CustomerAgent {
     const log = (message: string, level: ExecutionLog["level"] = "INFO") => {
       logs.push({ agentName: this.agentName, level, message, timestamp: new Date() })
     }
+
+    const executionId = this.logger.logStart(
+      this.agentName,
+      task.type,
+      task.input as Record<string, unknown>
+    )
 
     log(`Received customer task: "${task.type}" - "${task.description}" (Session: ${context.sessionId})`)
 
@@ -41,21 +54,25 @@ export class CustomerAgent {
 
           if (!customer) {
             log(`Customer not found for email: ${email}`, "WARN")
-            return {
+            const result: AgentResult = {
               agentName: this.agentName,
               status: "SUCCESS",
               output: { found: false },
               logs,
             }
+            this.logger.logSuccess(executionId, 1.0, result.output)
+            return result
           }
 
           log(`Customer found: "${customer.name}" associated with company "${customer.company || "N/A"}"`)
-          return {
+          const result: AgentResult = {
             agentName: this.agentName,
             status: "SUCCESS",
             output: { found: true, customer },
             logs,
           }
+          this.logger.logSuccess(executionId, 1.0, result.output)
+          return result
         }
 
         case "LOG_CUSTOMER_EMAIL": {
@@ -86,12 +103,14 @@ export class CustomerAgent {
           })
 
           log(`Communication successfully logged with ID: ${newEmail.id}`)
-          return {
+          const result: AgentResult = {
             agentName: this.agentName,
             status: "SUCCESS",
             output: { logged: true, emailId: newEmail.id, email: newEmail },
             logs,
           }
+          this.logger.logSuccess(executionId, 1.0, result.output)
+          return result
         }
 
         default:
@@ -100,6 +119,7 @@ export class CustomerAgent {
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err)
       log(`Execution failed: ${message}`, "ERROR")
+      this.logger.logFailure(executionId, err instanceof Error ? err : message)
       return {
         agentName: this.agentName,
         status: "FAILURE",

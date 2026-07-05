@@ -1,9 +1,16 @@
 import { prisma } from "@/lib/prisma"
 import { Task, AgentResult, AgentContext, ExecutionLog } from "../shared/types"
 import { PurchaseOrderStatus, ApprovalStatus } from "@prisma/client"
+import { IAgentLogger } from "../../logger/types"
+import { AgentLogger } from "../../logger/AgentLogger"
 
 export class ProcurementAgent {
   private agentName = "ProcurementAgent"
+  private logger: IAgentLogger
+
+  constructor(logger?: IAgentLogger) {
+    this.logger = logger ?? AgentLogger.getInstance()
+  }
 
   /**
    * Executes procurement purchase order workflows.
@@ -13,6 +20,12 @@ export class ProcurementAgent {
     const log = (message: string, level: ExecutionLog["level"] = "INFO") => {
       logs.push({ agentName: this.agentName, level, message, timestamp: new Date() })
     }
+
+    const executionId = this.logger.logStart(
+      this.agentName,
+      task.type,
+      task.input as Record<string, unknown>
+    )
 
     log(`Received procurement task: "${task.type}" - "${task.description}" (Session: ${context.sessionId})`)
 
@@ -69,7 +82,7 @@ export class ProcurementAgent {
           })
 
           log(`Successfully drafted PO. Reference ID: PO-${purchaseOrder.id.substring(0, 8).toUpperCase()}`)
-          return {
+          const result: AgentResult = {
             agentName: this.agentName,
             status: "SUCCESS",
             output: {
@@ -79,6 +92,8 @@ export class ProcurementAgent {
             },
             logs,
           }
+          this.logger.logSuccess(executionId, 1.0, result.output)
+          return result
         }
 
         case "APPROVE_PO": {
@@ -116,7 +131,7 @@ export class ProcurementAgent {
           })
 
           log(`PO ID "${purchaseOrderId}" status updated to APPROVED. Link Approval ID: ${approval.id}`)
-          return {
+          const result: AgentResult = {
             agentName: this.agentName,
             status: "SUCCESS",
             output: {
@@ -127,6 +142,8 @@ export class ProcurementAgent {
             },
             logs,
           }
+          this.logger.logSuccess(executionId, 1.0, result.output)
+          return result
         }
 
         default:
@@ -135,6 +152,7 @@ export class ProcurementAgent {
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err)
       log(`Execution failed: ${message}`, "ERROR")
+      this.logger.logFailure(executionId, err instanceof Error ? err : message)
       return {
         agentName: this.agentName,
         status: "FAILURE",

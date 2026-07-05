@@ -1,8 +1,15 @@
 import { prisma } from "@/lib/prisma"
 import { Task, AgentResult, AgentContext, ExecutionLog } from "../shared/types"
+import { IAgentLogger } from "../../logger/types"
+import { AgentLogger } from "../../logger/AgentLogger"
 
 export class InventoryAgent {
   private agentName = "InventoryAgent"
+  private logger: IAgentLogger
+
+  constructor(logger?: IAgentLogger) {
+    this.logger = logger ?? AgentLogger.getInstance()
+  }
 
   /**
    * Executes inventory check and adjustments.
@@ -12,6 +19,12 @@ export class InventoryAgent {
     const log = (message: string, level: ExecutionLog["level"] = "INFO") => {
       logs.push({ agentName: this.agentName, level, message, timestamp: new Date() })
     }
+
+    const executionId = this.logger.logStart(
+      this.agentName,
+      task.type,
+      task.input as Record<string, unknown>
+    )
 
     log(`Received inventory task: "${task.type}" - "${task.description}" (Session: ${context.sessionId})`)
 
@@ -38,12 +51,14 @@ export class InventoryAgent {
 
           if (!product) {
             log(`Product SKU "${sku}" not found in database catalog.`, "WARN")
-            return {
+            const result: AgentResult = {
               agentName: this.agentName,
               status: "SUCCESS",
               output: { found: false },
               logs,
             }
+            this.logger.logSuccess(executionId, 1.0, result.output)
+            return result
           }
 
           const stock = product.inventory?.quantity ?? 0
@@ -62,7 +77,7 @@ export class InventoryAgent {
             log(`Alert: Available stock for "${sku}" fell below replenishment threshold!`, "WARN")
           }
 
-          return {
+          const result: AgentResult = {
             agentName: this.agentName,
             status: "SUCCESS",
             output: {
@@ -79,6 +94,8 @@ export class InventoryAgent {
             },
             logs,
           }
+          this.logger.logSuccess(executionId, 1.0, result.output)
+          return result
         }
 
         case "ADJUST_STOCK": {
@@ -107,7 +124,7 @@ export class InventoryAgent {
           })
 
           log(`Stock adjusted. New quantity for "${sku}": ${updatedInventory.quantity}`)
-          return {
+          const result: AgentResult = {
             agentName: this.agentName,
             status: "SUCCESS",
             output: {
@@ -118,6 +135,8 @@ export class InventoryAgent {
             },
             logs,
           }
+          this.logger.logSuccess(executionId, 1.0, result.output)
+          return result
         }
 
         default:
@@ -126,6 +145,7 @@ export class InventoryAgent {
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err)
       log(`Execution failed: ${message}`, "ERROR")
+      this.logger.logFailure(executionId, err instanceof Error ? err : message)
       return {
         agentName: this.agentName,
         status: "FAILURE",

@@ -1,8 +1,15 @@
 import { prisma } from "@/lib/prisma"
 import { Task, AgentResult, AgentContext, ExecutionLog } from "../shared/types"
+import { IAgentLogger } from "../../logger/types"
+import { AgentLogger } from "../../logger/AgentLogger"
 
 export class AnalyticsAgent {
   private agentName = "AnalyticsAgent"
+  private logger: IAgentLogger
+
+  constructor(logger?: IAgentLogger) {
+    this.logger = logger ?? AgentLogger.getInstance()
+  }
 
   /**
    * Executes analytics compilation and audit tasks.
@@ -12,6 +19,12 @@ export class AnalyticsAgent {
     const log = (message: string, level: ExecutionLog["level"] = "INFO") => {
       logs.push({ agentName: this.agentName, level, message, timestamp: new Date() })
     }
+
+    const executionId = this.logger.logStart(
+      this.agentName,
+      task.type,
+      task.input as Record<string, unknown>
+    )
 
     log(`Received analytics task: "${task.type}" - "${task.description}" (Session: ${context.sessionId})`)
 
@@ -34,7 +47,7 @@ export class AnalyticsAgent {
           const totalSales = allOrders.reduce((sum, order) => sum + Number(order.totalAmount), 0)
 
           log(`Snapshot metrics compiled. Total Products: ${productCount}, Customers: ${customerCount}, Sales: $${totalSales.toFixed(2)}`)
-          return {
+          const result: AgentResult = {
             agentName: this.agentName,
             status: "SUCCESS",
             output: {
@@ -46,6 +59,8 @@ export class AnalyticsAgent {
             },
             logs,
           }
+          this.logger.logSuccess(executionId, 1.0, result.output)
+          return result
         }
 
         case "RUN_ORDER_AUDIT": {
@@ -64,12 +79,14 @@ export class AnalyticsAgent {
           const totalOrders = orders.length
           if (totalOrders === 0) {
             log("No sales orders available for audit.", "WARN")
-            return {
+            const result: AgentResult = {
               agentName: this.agentName,
               status: "SUCCESS",
               output: { audited: 0, highValueOrders: [] },
               logs,
             }
+            this.logger.logSuccess(executionId, 1.0, result.output)
+            return result
           }
 
           const sumSales = orders.reduce((sum, o) => sum + Number(o.totalAmount), 0)
@@ -86,7 +103,7 @@ export class AnalyticsAgent {
             }))
 
           log(`Audited ${totalOrders} orders. Average order size: $${avgOrderValue.toFixed(2)}. Flagged ${highValueOrders.length} high-value orders.`)
-          return {
+          const result: AgentResult = {
             agentName: this.agentName,
             status: "SUCCESS",
             output: {
@@ -97,6 +114,8 @@ export class AnalyticsAgent {
             },
             logs,
           }
+          this.logger.logSuccess(executionId, 1.0, result.output)
+          return result
         }
 
         default:
@@ -105,6 +124,7 @@ export class AnalyticsAgent {
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err)
       log(`Execution failed: ${message}`, "ERROR")
+      this.logger.logFailure(executionId, err instanceof Error ? err : message)
       return {
         agentName: this.agentName,
         status: "FAILURE",

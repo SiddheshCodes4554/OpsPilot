@@ -1,8 +1,15 @@
 import { prisma } from "@/lib/prisma"
 import { Task, AgentResult, AgentContext, ExecutionLog } from "../shared/types"
+import { IAgentLogger } from "../../logger/types"
+import { AgentLogger } from "../../logger/AgentLogger"
 
 export class SupplierAgent {
   private agentName = "SupplierAgent"
+  private logger: IAgentLogger
+
+  constructor(logger?: IAgentLogger) {
+    this.logger = logger ?? AgentLogger.getInstance()
+  }
 
   /**
    * Executes supplier lookup and catalog mapping.
@@ -12,6 +19,12 @@ export class SupplierAgent {
     const log = (message: string, level: ExecutionLog["level"] = "INFO") => {
       logs.push({ agentName: this.agentName, level, message, timestamp: new Date() })
     }
+
+    const executionId = this.logger.logStart(
+      this.agentName,
+      task.type,
+      task.input as Record<string, unknown>
+    )
 
     log(`Received supplier task: "${task.type}" - "${task.description}" (Session: ${context.sessionId})`)
 
@@ -39,16 +52,18 @@ export class SupplierAgent {
 
           if (!product || !product.supplier) {
             log(`Primary supplier not configured or found for product.`, "WARN")
-            return {
+            const result: AgentResult = {
               agentName: this.agentName,
               status: "SUCCESS",
               output: { found: false },
               logs,
             }
+            this.logger.logSuccess(executionId, 1.0, result.output)
+            return result
           }
 
           log(`Successfully matched product "${product.name}" to Supplier "${product.supplier.name}"`)
-          return {
+          const result: AgentResult = {
             agentName: this.agentName,
             status: "SUCCESS",
             output: {
@@ -61,6 +76,8 @@ export class SupplierAgent {
             },
             logs,
           }
+          this.logger.logSuccess(executionId, 1.0, result.output)
+          return result
         }
 
         case "GET_SUPPLIER_CATALOG": {
@@ -86,7 +103,7 @@ export class SupplierAgent {
           }
 
           log(`Successfully loaded catalog for "${supplier.name}". Catalog items: ${supplier.products.length}`)
-          return {
+          const result: AgentResult = {
             agentName: this.agentName,
             status: "SUCCESS",
             output: {
@@ -95,6 +112,8 @@ export class SupplierAgent {
             },
             logs,
           }
+          this.logger.logSuccess(executionId, 1.0, result.output)
+          return result
         }
 
         default:
@@ -103,6 +122,7 @@ export class SupplierAgent {
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err)
       log(`Execution failed: ${message}`, "ERROR")
+      this.logger.logFailure(executionId, err instanceof Error ? err : message)
       return {
         agentName: this.agentName,
         status: "FAILURE",
