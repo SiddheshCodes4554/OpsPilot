@@ -2,6 +2,7 @@ import { Task, AgentResult, AgentContext, ExecutionLog, IAgent } from "../shared
 import { IAgentLogger } from "../../logger/types"
 import { AgentLogger } from "../../logger/AgentLogger"
 import { prisma } from "../../prisma"
+import { EmailService } from "../../email/EmailService"
 import {
   KnowledgeAgent,
   WarrantyAgent,
@@ -27,6 +28,7 @@ export class ManagerAgent implements IAgent {
   private returnAgent: IAgent
   private supportAgent: IAgent
   private customerResponseAgent: IAgent
+  private emailService: EmailService
 
   constructor(
     customerAgent: IAgent,
@@ -40,7 +42,8 @@ export class ManagerAgent implements IAgent {
     returnAgent?: IAgent,
     supportAgent?: IAgent,
     customerResponseAgent?: IAgent,
-    logger?: IAgentLogger
+    logger?: IAgentLogger,
+    emailService?: EmailService
   ) {
     this.customerAgent = customerAgent
     this.inventoryAgent = inventoryAgent
@@ -48,6 +51,7 @@ export class ManagerAgent implements IAgent {
     this.supplierAgent = supplierAgent
     this.analyticsAgent = analyticsAgent
     this.logger = logger ?? AgentLogger.getInstance()
+    this.emailService = emailService ?? EmailService.fromEnv()
 
     // Dependency injection fallback for new agents to prevent breaking existing instantiation sites
     this.knowledgeAgent = knowledgeAgent ?? new KnowledgeAgent(this.logger)
@@ -302,6 +306,12 @@ export class ManagerAgent implements IAgent {
                 })
 
                 log(`Customer Order PO-${newOrder.id.substring(0, 8).toUpperCase()} placed.`)
+
+                // Notify customer via EmailService
+                const orderConfirmBody = `Dear ${customer.name},\n\nYour order for ${orderQty}x ${matchedProduct.name} has been confirmed. Total: $${orderAmount.toFixed(2)}.\n\nWe will notify you once it ships.\n\nBest regards,\nOpsPilot Operations`
+                await this.emailService.sendCustomerEmail(email, `Order Confirmation – ${matchedProduct.name}`, orderConfirmBody)
+                log(`Order confirmation email dispatched to "${email}".`)
+
                 const notification = await prisma.notification.create({
                   data: {
                     title: "New Customer Order Placed",
@@ -393,6 +403,8 @@ export class ManagerAgent implements IAgent {
                   recipient: email,
                 },
               })
+              await this.emailService.sendCustomerEmail(email, `Re: ${subject}`, reply)
+              log(`Product inquiry reply dispatched to "${email}".`)
 
               const notification = await prisma.notification.create({
                 data: {
@@ -437,6 +449,8 @@ export class ManagerAgent implements IAgent {
                   recipient: email,
                 },
               })
+              await this.emailService.sendCustomerEmail(email, `Re: ${subject}`, reply)
+              log(`Warranty reply dispatched to "${email}".`)              
 
               const notification = await prisma.notification.create({
                 data: {
@@ -492,6 +506,17 @@ export class ManagerAgent implements IAgent {
                   recipient: email,
                 },
               })
+              await this.emailService.sendCustomerEmail(email, `Re: ${subject}`, reply)
+              log(`Refund acknowledgement dispatched to "${email}".`)
+
+              // Notify approval reviewer via email
+              const approvalNoticeBody = `A refund request from ${customer.name} <${email}> for "${subject}" requires your approval.\n\nApproval ID: ${approvalRecord.id}\n\nPlease review at your earliest convenience.`
+              await this.emailService.sendApprovalEmail(
+                process.env.APPROVAL_REVIEWER_EMAIL || "manager@opspilot.ai",
+                `Refund Approval Required – ${customer.name}`,
+                approvalNoticeBody
+              )
+              log(`Refund approval notification email dispatched to reviewer.`)
 
               const notification = await prisma.notification.create({
                 data: {
@@ -536,6 +561,8 @@ export class ManagerAgent implements IAgent {
                   recipient: email,
                 },
               })
+              await this.emailService.sendCustomerEmail(email, `Re: ${subject}`, reply)
+              log(`Return instructions dispatched to "${email}".`)
 
               const notification = await prisma.notification.create({
                 data: {
@@ -580,6 +607,8 @@ export class ManagerAgent implements IAgent {
                   recipient: email,
                 },
               })
+              await this.emailService.sendCustomerEmail(email, `Re: ${subject}`, reply)
+              log(`Complaint reconciliation reply dispatched to "${email}".`)
 
               const notification = await prisma.notification.create({
                 data: {
@@ -655,6 +684,8 @@ export class ManagerAgent implements IAgent {
                   recipient: email,
                 },
               })
+              await this.emailService.sendSupplierEmail(email, `Re: ${subject}`, reply)
+              log(`Supplier reply acknowledgement dispatched to "${email}".`)
 
               const notification = await prisma.notification.create({
                 data: {
@@ -700,6 +731,8 @@ export class ManagerAgent implements IAgent {
                   recipient: email,
                 },
               })
+              await this.emailService.sendCustomerEmail(email, `Re: ${subject}`, reply)
+              log(`General reply dispatched to "${email}".`)
 
               const notification = await prisma.notification.create({
                 data: {

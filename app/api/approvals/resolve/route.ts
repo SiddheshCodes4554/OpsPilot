@@ -3,6 +3,7 @@ import { prisma } from "@/lib/prisma"
 import { ApprovalStatus, PurchaseOrderStatus } from "@prisma/client"
 import { ProcurementAgent } from "@/lib/agents/procurement/ProcurementAgent"
 import { DbAgentLogger } from "@/lib/logger/DbAgentLogger"
+import { EmailService } from "@/lib/email/EmailService"
 
 export async function POST(req: Request) {
   try {
@@ -112,6 +113,10 @@ export async function POST(req: Request) {
             recipient: po.supplier.email,
           },
         })
+
+        // Dispatch via EmailService — provider selected from env
+        const emailService = EmailService.fromEnv()
+        await emailService.sendSupplierEmail(po.supplier.email, emailSubject, emailBody)
       } catch (err) {
         console.error("[PO_APPROVE] Failed to generate/store supplier email:", err)
       }
@@ -123,6 +128,19 @@ export async function POST(req: Request) {
           content: `Purchase Order PO-${po.id.substring(0, 8).toUpperCase()} for ${po.supplier.name} has been rejected by the manager. Comments: ${comments || "Rejected by Manager"}.`,
         },
       })
+
+      // Notify reviewer about rejection via EmailService
+      try {
+        const emailService = EmailService.fromEnv()
+        const rejectionBody = `A purchase order PO-${po.id.substring(0, 8).toUpperCase()} for ${po.supplier.name} has been rejected.\n\nComments: ${comments || "Rejected by Manager"}\n\nPlease review and take appropriate action.`
+        await emailService.sendApprovalEmail(
+          process.env.APPROVAL_REVIEWER_EMAIL || "manager@opspilot.ai",
+          `Purchase Order Rejected – ${po.supplier.name}`,
+          rejectionBody
+        )
+      } catch (err) {
+        console.error("[PO_REJECT] Failed to dispatch rejection notification email:", err)
+      }
     }
 
     return NextResponse.json({ status: "success", data: resolvedApproval })

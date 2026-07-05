@@ -4,6 +4,7 @@ import { PurchaseOrderStatus } from "@prisma/client"
 import { IAgentLogger } from "../../logger/types"
 import { AgentLogger } from "../../logger/AgentLogger"
 import { GroqService } from "../../ai/GroqService"
+import { EmailService } from "../../email/EmailService"
 import {
   EMAIL_DRAFT_SYSTEM_PROMPT,
   EMAIL_DRAFT_USER_TEMPLATE,
@@ -14,10 +15,12 @@ export class ProcurementAgent implements IAgent {
   private agentName = "ProcurementAgent"
   private logger: IAgentLogger
   private groqService: GroqService
+  private emailService: EmailService
 
-  constructor(logger?: IAgentLogger) {
+  constructor(logger?: IAgentLogger, emailService?: EmailService) {
     this.logger = logger ?? AgentLogger.getInstance()
     this.groqService = GroqService.getInstance()
+    this.emailService = emailService ?? EmailService.fromEnv()
   }
 
   /**
@@ -145,7 +148,22 @@ export class ProcurementAgent implements IAgent {
         { temperature: 0.2 }
       )
 
-      log(`Supplier email draft generated.`)
+      // Send the generated supplier email via EmailService (provider selected from env)
+      try {
+        const sent = await this.emailService.sendSupplierEmail(
+          supplier.email,
+          emailDraft.subject,
+          emailDraft.body
+        )
+        if (sent) {
+          log(`Supplier email dispatched to "${supplier.email}" via EmailService.`)
+        } else {
+          log(`EmailService could not dispatch email to "${supplier.email}".`, "WARN")
+        }
+      } catch (emailErr) {
+        const errMsg = emailErr instanceof Error ? emailErr.message : String(emailErr)
+        log(`EmailService dispatch failed (non-fatal): ${errMsg}`, "WARN")
+      }
 
       const output = {
         purchaseOrderDraft: purchaseOrder,
