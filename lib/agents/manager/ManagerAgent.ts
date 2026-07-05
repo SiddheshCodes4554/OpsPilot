@@ -2,7 +2,6 @@ import { Task, AgentResult, AgentContext, ExecutionLog, IAgent } from "../shared
 import { IAgentLogger } from "../../logger/types"
 import { AgentLogger } from "../../logger/AgentLogger"
 import { prisma } from "../../prisma"
-import { EmailService } from "../../email/EmailService"
 import {
   KnowledgeAgent,
   WarrantyAgent,
@@ -11,6 +10,35 @@ import {
   SupportAgent,
   CustomerResponseAgent
 } from "../shared/ExtraAgents"
+
+// ---------------------------------------------------------------------------
+// Internal types
+// ---------------------------------------------------------------------------
+
+/**
+ * Payload shape forwarded to POST /api/email/reply after each completed workflow.
+ * ManagerAgent never generates or sends emails itself — all dispatch is delegated
+ * to the email reply API which handles templates, rendering, sending, and DB persistence.
+ */
+interface EmailDispatch {
+  recipient: string
+  recipientName?: string
+  subject: string
+  body: string
+  type:
+    | "CUSTOMER_REPLY"
+    | "SUPPLIER_REPLY"
+    | "APPROVAL_REQUEST"
+    | "INVENTORY_ALERT"
+    | "NOTIFICATION"
+    | "ORDER_CONFIRMATION"
+    | "WARRANTY_RESPONSE"
+    | "PRODUCT_INQUIRY"
+    | "REFUND"
+    | "COMPLAINT"
+    | "GENERAL"
+  priority?: "LOW" | "MEDIUM" | "HIGH"
+}
 
 export class ManagerAgent implements IAgent {
   private agentName = "ManagerAgent"
@@ -28,7 +56,6 @@ export class ManagerAgent implements IAgent {
   private returnAgent: IAgent
   private supportAgent: IAgent
   private customerResponseAgent: IAgent
-  private emailService: EmailService
 
   constructor(
     customerAgent: IAgent,
@@ -42,8 +69,7 @@ export class ManagerAgent implements IAgent {
     returnAgent?: IAgent,
     supportAgent?: IAgent,
     customerResponseAgent?: IAgent,
-    logger?: IAgentLogger,
-    emailService?: EmailService
+    logger?: IAgentLogger
   ) {
     this.customerAgent = customerAgent
     this.inventoryAgent = inventoryAgent
@@ -51,7 +77,6 @@ export class ManagerAgent implements IAgent {
     this.supplierAgent = supplierAgent
     this.analyticsAgent = analyticsAgent
     this.logger = logger ?? AgentLogger.getInstance()
-    this.emailService = emailService ?? EmailService.fromEnv()
 
     // Dependency injection fallback for new agents to prevent breaking existing instantiation sites
     this.knowledgeAgent = knowledgeAgent ?? new KnowledgeAgent(this.logger)
@@ -62,8 +87,49 @@ export class ManagerAgent implements IAgent {
     this.customerResponseAgent = customerResponseAgent ?? new CustomerResponseAgent(this.logger)
   }
 
+  // ---------------------------------------------------------------------------
+  // Email dispatch — delegates entirely to POST /api/email/reply.
+  // Agents never call EmailService or write to prisma.email directly.
+  // ---------------------------------------------------------------------------
+
+  /**
+   * Fire-and-forget email dispatch.
+   * Failures are logged but never throw — a workflow should never fail because
+   * of an email dispatch error.
+   */
+  private async dispatchEmailReply(dispatch: EmailDispatch): Promise<void> {
+    try {
+      const baseUrl =
+        process.env.NEXT_PUBLIC_APP_URL ||
+        process.env.APP_URL ||
+        "http://localhost:3000"
+
+      const res = await fetch(`${baseUrl}/api/email/reply`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(dispatch),
+      })
+
+      if (!res.ok) {
+        const errBody = await res.json().catch(() => ({}))
+        console.warn(
+          `[ManagerAgent] Email reply dispatch returned ${res.status}:`,
+          errBody
+        )
+      }
+    } catch (err) {
+      console.error("[ManagerAgent] dispatchEmailReply failed (non-fatal):", err)
+    }
+  }
+
+  // ---------------------------------------------------------------------------
+  // Main orchestration entry point
+  // ---------------------------------------------------------------------------
+
   /**
    * Orchestrates multi-agent routing workflows based on CustomerAgent intent.
+   * After every completed workflow, returns { reply, subject, recipient, template }
+   * and delegates email sending to POST /api/email/reply.
    */
   async execute(task: Task, context: AgentContext): Promise<AgentResult> {
     const logs: ExecutionLog[] = []
@@ -81,6 +147,7 @@ export class ManagerAgent implements IAgent {
 
     try {
       switch (task.type) {
+        // ─────────────────────────────────────────────────────────────────────
         case "REPLENISHMENT_WORKFLOW": {
           const { sku, quantity } = task.input as { sku?: string; quantity?: number }
           if (!sku || quantity === undefined) {
@@ -109,6 +176,7 @@ export class ManagerAgent implements IAgent {
             recommendedQuantity: number
             name: string
           }
+
           if (!reorder) {
             log(`Product "${name}" is healthy. No replenishment needed. Concluding workflow.`)
             const result: AgentResult = {
@@ -131,10 +199,7 @@ export class ManagerAgent implements IAgent {
               id: `${task.id}-step2`,
               type: "DRAFT_PO",
               description: `Drafting replenishment PO for SKU: ${sku}`,
-              input: {
-                sku,
-                quantity: recommendedQuantity || quantity,
-              },
+              input: { sku, quantity: recommendedQuantity || quantity },
               createdAt: new Date(),
             },
             context
@@ -175,13 +240,20 @@ export class ManagerAgent implements IAgent {
           return result
         }
 
+        // ─────────────────────────────────────────────────────────────────────
         case "CUSTOMER_INQUIRY_WORKFLOW": {
-          const { email, subject, body } = task.input as { email?: string; subject?: string; body?: string }
+          const { email, subject, body } = task.input as {
+            email?: string
+            subject?: string
+            body?: string
+          }
           if (!email || !subject || !body) {
-            throw new Error("Missing required inputs (email, subject, body) for CUSTOMER_INQUIRY_WORKFLOW.")
+            throw new Error(
+              "Missing required inputs (email, subject, body) for CUSTOMER_INQUIRY_WORKFLOW."
+            )
           }
 
-          // Step 1: Call CustomerAgent to classify intent
+          // Step 1: Classify intent via CustomerAgent
           log(`Step 1: Dispatching ANALYZE_EMAIL to CustomerAgent for email from: "${email}"`)
           const analysisResult = await this.customerAgent.execute(
             {
@@ -196,7 +268,9 @@ export class ManagerAgent implements IAgent {
           logs.push(...analysisResult.logs)
 
           if (analysisResult.status === "FAILURE") {
-            throw new Error(`Customer email analysis failed: ${analysisResult.errors?.join(", ")}`)
+            throw new Error(
+              `Customer email analysis failed: ${analysisResult.errors?.join(", ")}`
+            )
           }
 
           const { customerName, intent, product, quantity } = analysisResult.output as {
@@ -208,7 +282,7 @@ export class ManagerAgent implements IAgent {
 
           log(`Customer intent identified: "${intent}". Routing workflow accordingly.`)
 
-          // Create CRM Customer profile if needed
+          // Ensure CRM customer record exists
           let customer = await prisma.customer.findUnique({ where: { email } })
           if (!customer) {
             customer = await prisma.customer.create({
@@ -220,14 +294,14 @@ export class ManagerAgent implements IAgent {
             log(`Created Customer CRM record for "${email}".`)
           }
 
-          // Step 2: Route workflows by exact intent
+          // ── Step 2: Route by intent ────────────────────────────────────────
           switch (intent) {
+            // ── ORDER ─────────────────────────────────────────────────────────
             case "ORDER": {
               if (!product) {
                 throw new Error("No product specified in customer order request.")
               }
 
-              // Match product in database catalog
               const matchedProduct = await prisma.product.findFirst({
                 where: {
                   OR: [
@@ -241,23 +315,29 @@ export class ManagerAgent implements IAgent {
               if (!matchedProduct) {
                 log(`Could not find product "${product}" in catalog. Generating inquiry response.`)
                 const replyText = `Dear ${customer.name},\n\nWe could not find the requested item "${product}" in our current catalog. Please check if the name or SKU is correct.\n\nBest regards,\nCustomer Support`
+                const replySubject = `Re: ${subject}`
 
-                await prisma.email.create({
-                  data: {
-                    customerId: customer.id,
-                    subject: `Re: ${subject}`,
-                    body: replyText,
-                    status: "SENT",
-                    priority: "MEDIUM",
-                    sender: "support@opspilot.ai",
-                    recipient: email,
-                  },
+                await this.dispatchEmailReply({
+                  recipient: email,
+                  recipientName: customer.name,
+                  subject: replySubject,
+                  body: replyText,
+                  type: "CUSTOMER_REPLY",
+                  priority: "MEDIUM",
                 })
+                log(`Product-not-found reply dispatched to "${email}".`)
 
                 const result: AgentResult = {
                   agentName: this.agentName,
                   status: "SUCCESS",
-                  output: { workflow: "ORDER_PRODUCT_NOT_FOUND", intent, replyText },
+                  output: {
+                    workflow: "ORDER_PRODUCT_NOT_FOUND",
+                    intent,
+                    reply: replyText,
+                    subject: replySubject,
+                    recipient: email,
+                    template: "CUSTOMER_REPLY",
+                  },
                   logs,
                 }
                 this.logger.logSuccess(executionId, 1.0, result.output)
@@ -285,57 +365,81 @@ export class ManagerAgent implements IAgent {
               }
 
               if (available) {
-                // Deduct stock levels and place order in a transaction block
+                // Deduct stock and create order atomically
                 const orderAmount = Number(matchedProduct.price) * orderQty
                 const newOrder = await prisma.$transaction(async (tx) => {
                   await tx.inventory.update({
                     where: { productId: matchedProduct.id },
                     data: { quantity: { decrement: orderQty } },
                   })
-
                   return tx.order.create({
                     data: {
                       customerId: customer!.id,
                       status: "PENDING",
                       totalAmount: orderAmount,
                       items: {
-                        create: [{ productId: matchedProduct.id, quantity: orderQty, unitPrice: matchedProduct.price }],
+                        create: [
+                          {
+                            productId: matchedProduct.id,
+                            quantity: orderQty,
+                            unitPrice: matchedProduct.price,
+                          },
+                        ],
                       },
                     },
                   })
                 })
 
-                log(`Customer Order PO-${newOrder.id.substring(0, 8).toUpperCase()} placed.`)
+                log(`Customer Order #${newOrder.id.substring(0, 8).toUpperCase()} placed.`)
 
-                // Notify customer via EmailService
-                const orderConfirmBody = `Dear ${customer.name},\n\nYour order for ${orderQty}x ${matchedProduct.name} has been confirmed. Total: $${orderAmount.toFixed(2)}.\n\nWe will notify you once it ships.\n\nBest regards,\nOpsPilot Operations`
-                await this.emailService.sendCustomerEmail(email, `Order Confirmation – ${matchedProduct.name}`, orderConfirmBody)
-                log(`Order confirmation email dispatched to "${email}".`)
+                const confirmationBody = `Dear ${customer.name},\n\nYour order for ${orderQty}x ${matchedProduct.name} has been confirmed.\n\nOrder ID: ${newOrder.id}\nTotal: $${orderAmount.toFixed(2)}\n\nWe will notify you once your order ships.\n\nBest regards,\nOpsPilot Operations`
+                const confirmSubject = `Order Confirmed — ${newOrder.id.substring(0, 8).toUpperCase()}`
 
-                const notification = await prisma.notification.create({
+                await prisma.notification.create({
                   data: {
                     title: "New Customer Order Placed",
-                    content: `Order successfully placed for ${customer.name}: ${orderQty}x ${matchedProduct.name} (Total: $${orderAmount.toFixed(2)})`,
+                    content: `Order placed for ${customer.name}: ${orderQty}x ${matchedProduct.name} (Total: $${orderAmount.toFixed(2)})`,
                   },
                 })
+
+                await this.dispatchEmailReply({
+                  recipient: email,
+                  recipientName: customer.name,
+                  subject: confirmSubject,
+                  body: confirmationBody,
+                  type: "ORDER_CONFIRMATION",
+                  priority: "MEDIUM",
+                })
+                log(`Order confirmation dispatched to "${email}".`)
 
                 const result: AgentResult = {
                   agentName: this.agentName,
                   status: "SUCCESS",
-                  output: { workflow: "ORDER_PLACED", intent, orderId: newOrder.id, notification },
+                  output: {
+                    workflow: "ORDER_PLACED",
+                    intent,
+                    orderId: newOrder.id,
+                    reply: confirmationBody,
+                    subject: confirmSubject,
+                    recipient: email,
+                    template: "ORDER_CONFIRMATION",
+                  },
                   logs,
                 }
                 this.logger.logSuccess(executionId, 1.0, result.output)
                 return result
               } else {
-                // Stock deficit replenishment path
+                // Stock deficit — procure
                 log(`Stock deficit. Triggering replenishment PO for quantity: ${recommendedQuantity}`)
                 const procurementResult = await this.procurementAgent.execute(
                   {
                     id: `${task.id}-order-procure`,
                     type: "DRAFT_PO",
                     description: "Procure items for shortage",
-                    input: { sku: matchedProduct.sku, quantity: recommendedQuantity || orderQty },
+                    input: {
+                      sku: matchedProduct.sku,
+                      quantity: recommendedQuantity || orderQty,
+                    },
                     createdAt: new Date(),
                   },
                   context
@@ -359,17 +463,39 @@ export class ManagerAgent implements IAgent {
                   log(`Approval request raised for PO ID: ${purchaseOrderDraft.id}`)
                 }
 
-                const notification = await prisma.notification.create({
+                await prisma.notification.create({
                   data: {
                     title: "Stock Shortage: PO Created",
                     content: `Stock deficit for ${matchedProduct.name}. Raised PO for ${recommendedQuantity || orderQty} units.`,
                   },
                 })
 
+                const backorderBody = `Dear ${customer.name},\n\nThank you for your order. Unfortunately, ${matchedProduct.name} is temporarily out of stock. We have raised a replenishment order with our supplier and will fulfil your request as soon as stock arrives.\n\nBest regards,\nOpsPilot Operations`
+                const backorderSubject = `Re: ${subject} — Stock Update`
+
+                await this.dispatchEmailReply({
+                  recipient: email,
+                  recipientName: customer.name,
+                  subject: backorderSubject,
+                  body: backorderBody,
+                  type: "CUSTOMER_REPLY",
+                  priority: "MEDIUM",
+                })
+                log(`Backorder notification dispatched to "${email}".`)
+
                 const result: AgentResult = {
                   agentName: this.agentName,
                   status: "SUCCESS",
-                  output: { workflow: "REPLENISHMENT_TRIGGERED", intent, purchaseOrderId: purchaseOrderDraft?.id, approval: approvalRecord, notification },
+                  output: {
+                    workflow: "REPLENISHMENT_TRIGGERED",
+                    intent,
+                    purchaseOrderId: purchaseOrderDraft?.id,
+                    approval: approvalRecord,
+                    reply: backorderBody,
+                    subject: backorderSubject,
+                    recipient: email,
+                    template: "CUSTOMER_REPLY",
+                  },
                   logs,
                 }
                 this.logger.logSuccess(executionId, 1.0, result.output)
@@ -377,6 +503,7 @@ export class ManagerAgent implements IAgent {
               }
             }
 
+            // ── PRODUCT_INQUIRY ────────────────────────────────────────────────
             case "PRODUCT_INQUIRY": {
               log("Dispatching to KnowledgeAgent...")
               const agentResult = await this.knowledgeAgent.execute(
@@ -392,37 +519,43 @@ export class ManagerAgent implements IAgent {
               logs.push(...agentResult.logs)
 
               const { reply } = agentResult.output as { reply: string }
-              await prisma.email.create({
-                data: {
-                  customerId: customer.id,
-                  subject: `Re: ${subject}`,
-                  body: reply,
-                  status: "SENT",
-                  priority: "LOW",
-                  sender: "support@opspilot.ai",
-                  recipient: email,
-                },
-              })
-              await this.emailService.sendCustomerEmail(email, `Re: ${subject}`, reply)
-              log(`Product inquiry reply dispatched to "${email}".`)
+              const replySubject = `Re: ${subject}`
 
-              const notification = await prisma.notification.create({
+              await prisma.notification.create({
                 data: {
                   title: "Product Inquiry Resolved",
                   content: `Technical specs reply generated for ${customer.name}.`,
                 },
               })
 
+              await this.dispatchEmailReply({
+                recipient: email,
+                recipientName: customer.name,
+                subject: replySubject,
+                body: reply,
+                type: "PRODUCT_INQUIRY",
+                priority: "LOW",
+              })
+              log(`Product inquiry reply dispatched to "${email}".`)
+
               const result: AgentResult = {
                 agentName: this.agentName,
                 status: "SUCCESS",
-                output: { workflow: "PRODUCT_INQUIRY_RESPONDED", intent, reply, notification },
+                output: {
+                  workflow: "PRODUCT_INQUIRY_RESPONDED",
+                  intent,
+                  reply,
+                  subject: replySubject,
+                  recipient: email,
+                  template: "PRODUCT_INQUIRY",
+                },
                 logs,
               }
               this.logger.logSuccess(executionId, 1.0, result.output)
               return result
             }
 
+            // ── WARRANTY ───────────────────────────────────────────────────────
             case "WARRANTY": {
               log("Dispatching to WarrantyAgent...")
               const agentResult = await this.warrantyAgent.execute(
@@ -438,37 +571,43 @@ export class ManagerAgent implements IAgent {
               logs.push(...agentResult.logs)
 
               const { reply } = agentResult.output as { reply: string }
-              await prisma.email.create({
-                data: {
-                  customerId: customer.id,
-                  subject: `Re: ${subject}`,
-                  body: reply,
-                  status: "SENT",
-                  priority: "MEDIUM",
-                  sender: "warranty@opspilot.ai",
-                  recipient: email,
-                },
-              })
-              await this.emailService.sendCustomerEmail(email, `Re: ${subject}`, reply)
-              log(`Warranty reply dispatched to "${email}".`)              
+              const replySubject = `Re: ${subject}`
 
-              const notification = await prisma.notification.create({
+              await prisma.notification.create({
                 data: {
                   title: "Warranty Claim Processed",
                   content: `Warranty claim validation draft generated for ${customer.name}.`,
                 },
               })
 
+              await this.dispatchEmailReply({
+                recipient: email,
+                recipientName: customer.name,
+                subject: replySubject,
+                body: reply,
+                type: "WARRANTY_RESPONSE",
+                priority: "MEDIUM",
+              })
+              log(`Warranty reply dispatched to "${email}".`)
+
               const result: AgentResult = {
                 agentName: this.agentName,
                 status: "SUCCESS",
-                output: { workflow: "WARRANTY_RESPONDED", intent, reply, notification },
+                output: {
+                  workflow: "WARRANTY_RESPONDED",
+                  intent,
+                  reply,
+                  subject: replySubject,
+                  recipient: email,
+                  template: "WARRANTY_RESPONSE",
+                },
                 logs,
               }
               this.logger.logSuccess(executionId, 1.0, result.output)
               return result
             }
 
+            // ── REFUND ─────────────────────────────────────────────────────────
             case "REFUND": {
               log("Dispatching to RefundAgent...")
               const agentResult = await this.refundAgent.execute(
@@ -484,57 +623,68 @@ export class ManagerAgent implements IAgent {
               logs.push(...agentResult.logs)
 
               const { reply } = agentResult.output as { reply: string }
+              const replySubject = `Re: ${subject}`
 
-              // Create Approval request for refund
+              // Raise approval record for refund
               const approvalRecord = await prisma.approval.create({
                 data: {
                   status: "PENDING",
                   comments: `Refund Approval requested for ${customer.name}: ${subject}`,
                 },
               })
-
               log(`Refund validation approval requested.`)
 
-              await prisma.email.create({
-                data: {
-                  customerId: customer.id,
-                  subject: `Re: ${subject}`,
-                  body: reply,
-                  status: "SENT",
-                  priority: "HIGH",
-                  sender: "billing@opspilot.ai",
-                  recipient: email,
-                },
-              })
-              await this.emailService.sendCustomerEmail(email, `Re: ${subject}`, reply)
-              log(`Refund acknowledgement dispatched to "${email}".`)
-
-              // Notify approval reviewer via email
-              const approvalNoticeBody = `A refund request from ${customer.name} <${email}> for "${subject}" requires your approval.\n\nApproval ID: ${approvalRecord.id}\n\nPlease review at your earliest convenience.`
-              await this.emailService.sendApprovalEmail(
-                process.env.APPROVAL_REVIEWER_EMAIL || "manager@opspilot.ai",
-                `Refund Approval Required – ${customer.name}`,
-                approvalNoticeBody
-              )
-              log(`Refund approval notification email dispatched to reviewer.`)
-
-              const notification = await prisma.notification.create({
+              await prisma.notification.create({
                 data: {
                   title: "Refund Request: Approval Raised",
                   content: `Refund claim raised for ${customer.name}. Manager approval pending.`,
                 },
               })
 
+              // Dispatch acknowledgement to customer
+              await this.dispatchEmailReply({
+                recipient: email,
+                recipientName: customer.name,
+                subject: replySubject,
+                body: reply,
+                type: "REFUND",
+                priority: "HIGH",
+              })
+              log(`Refund acknowledgement dispatched to "${email}".`)
+
+              // Dispatch approval request to reviewer
+              const reviewerEmail =
+                process.env.APPROVAL_REVIEWER_EMAIL || "manager@opspilot.ai"
+              const approvalBody = `A refund request from ${customer.name} <${email}> for "${subject}" requires your approval.\n\nApproval ID: ${approvalRecord.id}\n\nPlease log in to the dashboard to review this request.`
+
+              await this.dispatchEmailReply({
+                recipient: reviewerEmail,
+                subject: `[Refund Approval Required] ${customer.name} — ${subject}`,
+                body: approvalBody,
+                type: "APPROVAL_REQUEST",
+                priority: "HIGH",
+              })
+              log(`Refund approval notification dispatched to reviewer.`)
+
               const result: AgentResult = {
                 agentName: this.agentName,
                 status: "SUCCESS",
-                output: { workflow: "REFUND_APPROVAL_RAISED", intent, reply, approval: approvalRecord, notification },
+                output: {
+                  workflow: "REFUND_APPROVAL_RAISED",
+                  intent,
+                  approval: approvalRecord,
+                  reply,
+                  subject: replySubject,
+                  recipient: email,
+                  template: "REFUND",
+                },
                 logs,
               }
               this.logger.logSuccess(executionId, 1.0, result.output)
               return result
             }
 
+            // ── RETURN ─────────────────────────────────────────────────────────
             case "RETURN": {
               log("Dispatching to ReturnAgent...")
               const agentResult = await this.returnAgent.execute(
@@ -550,37 +700,43 @@ export class ManagerAgent implements IAgent {
               logs.push(...agentResult.logs)
 
               const { reply } = agentResult.output as { reply: string }
-              await prisma.email.create({
-                data: {
-                  customerId: customer.id,
-                  subject: `Re: ${subject}`,
-                  body: reply,
-                  status: "SENT",
-                  priority: "MEDIUM",
-                  sender: "returns@opspilot.ai",
-                  recipient: email,
-                },
-              })
-              await this.emailService.sendCustomerEmail(email, `Re: ${subject}`, reply)
-              log(`Return instructions dispatched to "${email}".`)
+              const replySubject = `Re: ${subject}`
 
-              const notification = await prisma.notification.create({
+              await prisma.notification.create({
                 data: {
                   title: "Return Instructions Dispatched",
                   content: `RMA labels guidelines generated for ${customer.name}.`,
                 },
               })
 
+              await this.dispatchEmailReply({
+                recipient: email,
+                recipientName: customer.name,
+                subject: replySubject,
+                body: reply,
+                type: "CUSTOMER_REPLY",
+                priority: "MEDIUM",
+              })
+              log(`Return instructions dispatched to "${email}".`)
+
               const result: AgentResult = {
                 agentName: this.agentName,
                 status: "SUCCESS",
-                output: { workflow: "RETURN_RESPONDED", intent, reply, notification },
+                output: {
+                  workflow: "RETURN_RESPONDED",
+                  intent,
+                  reply,
+                  subject: replySubject,
+                  recipient: email,
+                  template: "CUSTOMER_REPLY",
+                },
                 logs,
               }
               this.logger.logSuccess(executionId, 1.0, result.output)
               return result
             }
 
+            // ── COMPLAINT ──────────────────────────────────────────────────────
             case "COMPLAINT": {
               log("Dispatching to SupportAgent...")
               const agentResult = await this.supportAgent.execute(
@@ -596,37 +752,43 @@ export class ManagerAgent implements IAgent {
               logs.push(...agentResult.logs)
 
               const { reply } = agentResult.output as { reply: string }
-              await prisma.email.create({
-                data: {
-                  customerId: customer.id,
-                  subject: `Re: ${subject}`,
-                  body: reply,
-                  status: "SENT",
-                  priority: "HIGH",
-                  sender: "relations@opspilot.ai",
-                  recipient: email,
-                },
-              })
-              await this.emailService.sendCustomerEmail(email, `Re: ${subject}`, reply)
-              log(`Complaint reconciliation reply dispatched to "${email}".`)
+              const replySubject = `Re: ${subject}`
 
-              const notification = await prisma.notification.create({
+              await prisma.notification.create({
                 data: {
                   title: "Complaint Escalation Formed",
-                  content: `Complaint resolution compensation drafted for ${customer.name}.`,
+                  content: `Complaint resolution draft generated for ${customer.name}.`,
                 },
               })
+
+              await this.dispatchEmailReply({
+                recipient: email,
+                recipientName: customer.name,
+                subject: replySubject,
+                body: reply,
+                type: "COMPLAINT",
+                priority: "HIGH",
+              })
+              log(`Complaint reply dispatched to "${email}".`)
 
               const result: AgentResult = {
                 agentName: this.agentName,
                 status: "SUCCESS",
-                output: { workflow: "COMPLAINT_RESPONDED", intent, reply, notification },
+                output: {
+                  workflow: "COMPLAINT_RESPONDED",
+                  intent,
+                  reply,
+                  subject: replySubject,
+                  recipient: email,
+                  template: "COMPLAINT",
+                },
                 logs,
               }
               this.logger.logSuccess(executionId, 1.0, result.output)
               return result
             }
 
+            // ── SUPPLIER ───────────────────────────────────────────────────────
             case "SUPPLIER": {
               log("Dispatching to SupplierAgent...")
               const agentResult = await this.supplierAgent.execute(
@@ -649,7 +811,6 @@ export class ManagerAgent implements IAgent {
 
               let poUpdateMessage = "No active PO match was found."
               if (confirmed) {
-                // Database Update: Find latest pending PO for this supplier email domain, and update status to ORDERED
                 const matchedSupplier = await prisma.supplier.findFirst({
                   where: { email: { contains: email.split("@")[1] } },
                 })
@@ -672,38 +833,46 @@ export class ManagerAgent implements IAgent {
               }
 
               const reply = `Dear Supplier partner,\n\nThank you for your reply. We have processed the confirmation details:\n- Confirmed: ${confirmed ? "Yes" : "No"}\n- Invoice: ${invoiceNumber || "N/A"}\n- Est. Delivery: ${deliveryDate || "N/A"}\n\n${poUpdateMessage}\n\nBest regards,\nOpsPilot Operations`
+              const replySubject = `Re: ${subject}`
 
-              await prisma.email.create({
-                data: {
-                  customerId: null,
-                  subject: `Re: ${subject}`,
-                  body: reply,
-                  status: "SENT",
-                  priority: "MEDIUM",
-                  sender: "procurement@opspilot.ai",
-                  recipient: email,
-                },
-              })
-              await this.emailService.sendSupplierEmail(email, `Re: ${subject}`, reply)
-              log(`Supplier reply acknowledgement dispatched to "${email}".`)
-
-              const notification = await prisma.notification.create({
+              await prisma.notification.create({
                 data: {
                   title: "Supplier Reply Parsed",
-                  content: `Supplier confirmation processed for wholesale order. status: ${confirmed ? "ORDERED" : "PENDING"}.`,
+                  content: `Supplier confirmation processed. Status: ${confirmed ? "ORDERED" : "PENDING"}.`,
                 },
               })
+
+              await this.dispatchEmailReply({
+                recipient: email,
+                subject: replySubject,
+                body: reply,
+                type: "SUPPLIER_REPLY",
+                priority: "MEDIUM",
+              })
+              log(`Supplier acknowledgement dispatched to "${email}".`)
 
               const result: AgentResult = {
                 agentName: this.agentName,
                 status: "SUCCESS",
-                output: { workflow: "SUPPLIER_REPLY_PROCESSED", intent, confirmed, invoiceNumber, deliveryDate, update: poUpdateMessage, notification },
+                output: {
+                  workflow: "SUPPLIER_REPLY_PROCESSED",
+                  intent,
+                  confirmed,
+                  invoiceNumber,
+                  deliveryDate,
+                  update: poUpdateMessage,
+                  reply,
+                  subject: replySubject,
+                  recipient: email,
+                  template: "SUPPLIER_REPLY",
+                },
                 logs,
               }
               this.logger.logSuccess(executionId, 1.0, result.output)
               return result
             }
 
+            // ── SHIPPING / GENERAL ─────────────────────────────────────────────
             case "SHIPPING":
             case "GENERAL": {
               log("Dispatching to CustomerResponseAgent...")
@@ -720,37 +889,43 @@ export class ManagerAgent implements IAgent {
               logs.push(...agentResult.logs)
 
               const { reply } = agentResult.output as { reply: string }
-              await prisma.email.create({
-                data: {
-                  customerId: customer.id,
-                  subject: `Re: ${subject}`,
-                  body: reply,
-                  status: "SENT",
-                  priority: "LOW",
-                  sender: "info@opspilot.ai",
-                  recipient: email,
-                },
-              })
-              await this.emailService.sendCustomerEmail(email, `Re: ${subject}`, reply)
-              log(`General reply dispatched to "${email}".`)
+              const replySubject = `Re: ${subject}`
 
-              const notification = await prisma.notification.create({
+              await prisma.notification.create({
                 data: {
                   title: "General Response Sent",
-                  content: `General relations reply dispatched to ${customer.name}.`,
+                  content: `General reply dispatched to ${customer.name}.`,
                 },
               })
+
+              await this.dispatchEmailReply({
+                recipient: email,
+                recipientName: customer.name,
+                subject: replySubject,
+                body: reply,
+                type: "GENERAL",
+                priority: "LOW",
+              })
+              log(`General reply dispatched to "${email}".`)
 
               const result: AgentResult = {
                 agentName: this.agentName,
                 status: "SUCCESS",
-                output: { workflow: "GENERAL_RESPONDED", intent, reply, notification },
+                output: {
+                  workflow: "GENERAL_RESPONDED",
+                  intent,
+                  reply,
+                  subject: replySubject,
+                  recipient: email,
+                  template: "GENERAL",
+                },
                 logs,
               }
               this.logger.logSuccess(executionId, 1.0, result.output)
               return result
             }
 
+            // ── UNKNOWN ────────────────────────────────────────────────────────
             case "UNKNOWN":
             default: {
               log("Intent is UNKNOWN. Escalating directly to owner...", "WARN")
@@ -764,7 +939,15 @@ export class ManagerAgent implements IAgent {
               const result: AgentResult = {
                 agentName: this.agentName,
                 status: "SUCCESS",
-                output: { workflow: "ESCALATED_TO_OWNER", intent, notification },
+                output: {
+                  workflow: "ESCALATED_TO_OWNER",
+                  intent,
+                  notification,
+                  reply: null,
+                  subject: null,
+                  recipient: null,
+                  template: null,
+                },
                 logs,
               }
               this.logger.logSuccess(executionId, 1.0, result.output)
@@ -773,8 +956,11 @@ export class ManagerAgent implements IAgent {
           }
         }
 
+        // ─────────────────────────────────────────────────────────────────────
         default:
-          throw new Error(`Unsupported orchestration task type "${task.type}" for ManagerAgent.`)
+          throw new Error(
+            `Unsupported orchestration task type "${task.type}" for ManagerAgent.`
+          )
       }
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err)

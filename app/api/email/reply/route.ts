@@ -26,11 +26,17 @@ import { EmailPriority } from "@prisma/client"
 /**
  * Supported email reply types.
  *
- * - CUSTOMER_REPLY:    General reply to a customer inquiry.
- * - SUPPLIER_REPLY:    Acknowledgement or response to a supplier email.
- * - APPROVAL_REQUEST:  Notify a reviewer that an action requires their approval.
- * - INVENTORY_ALERT:   Alert stakeholders about a stock-level issue.
- * - NOTIFICATION:      Generic workspace notification email.
+ * - CUSTOMER_REPLY:      General reply to a customer inquiry.
+ * - SUPPLIER_REPLY:      Acknowledgement or response to a supplier email.
+ * - APPROVAL_REQUEST:    Notify a reviewer that an action requires their approval.
+ * - INVENTORY_ALERT:     Alert stakeholders about a stock-level issue.
+ * - NOTIFICATION:        Generic workspace notification email.
+ * - ORDER_CONFIRMATION:  Confirm a placed customer order.
+ * - WARRANTY_RESPONSE:   Response to a warranty or repair claim.
+ * - PRODUCT_INQUIRY:     Answer to a product specification question.
+ * - REFUND:              Acknowledgement of a refund request.
+ * - COMPLAINT:           Response to a customer complaint.
+ * - GENERAL:             Catch-all for shipping, general, and UNKNOWN intents.
  */
 const EmailTypeEnum = z.enum([
   "CUSTOMER_REPLY",
@@ -38,6 +44,12 @@ const EmailTypeEnum = z.enum([
   "APPROVAL_REQUEST",
   "INVENTORY_ALERT",
   "NOTIFICATION",
+  "ORDER_CONFIRMATION",
+  "WARRANTY_RESPONSE",
+  "PRODUCT_INQUIRY",
+  "REFUND",
+  "COMPLAINT",
+  "GENERAL",
 ])
 
 const ReplyRequestSchema = z.object({
@@ -101,6 +113,12 @@ const typeToCategory: Record<ReplyRequest["type"], ServiceCategory> = {
   APPROVAL_REQUEST: "approval",
   INVENTORY_ALERT: "notification",
   NOTIFICATION: "notification",
+  ORDER_CONFIRMATION: "customer",
+  WARRANTY_RESPONSE: "customer",
+  PRODUCT_INQUIRY: "customer",
+  REFUND: "customer",
+  COMPLAINT: "customer",
+  GENERAL: "customer",
 }
 
 /** From-address per category (mirrors EmailService internals for DB storage). */
@@ -117,6 +135,12 @@ const typePriority: Record<ReplyRequest["type"], EmailPriority> = {
   APPROVAL_REQUEST: "HIGH",
   INVENTORY_ALERT: "HIGH",
   NOTIFICATION: "LOW",
+  ORDER_CONFIRMATION: "MEDIUM",
+  WARRANTY_RESPONSE: "MEDIUM",
+  PRODUCT_INQUIRY: "LOW",
+  REFUND: "HIGH",
+  COMPLAINT: "HIGH",
+  GENERAL: "LOW",
 }
 
 // ---------------------------------------------------------------------------
@@ -133,6 +157,54 @@ function buildTemplateDescriptor(req: ReplyRequest) {
         customerName: recipientName,
         originalSubject: req.subject,
         replyBody: req.body,
+      })
+
+    case "ORDER_CONFIRMATION":
+      return buildCustomerReplyTemplate({
+        customerName: recipientName,
+        originalSubject: req.subject,
+        replyBody: req.body,
+        agentName: "OpsPilot Orders",
+      })
+
+    case "WARRANTY_RESPONSE":
+      return buildCustomerReplyTemplate({
+        customerName: recipientName,
+        originalSubject: req.subject,
+        replyBody: req.body,
+        agentName: "OpsPilot Warranty",
+      })
+
+    case "PRODUCT_INQUIRY":
+      return buildCustomerReplyTemplate({
+        customerName: recipientName,
+        originalSubject: req.subject,
+        replyBody: req.body,
+        agentName: "OpsPilot Product Specialist",
+      })
+
+    case "REFUND":
+      return buildCustomerReplyTemplate({
+        customerName: recipientName,
+        originalSubject: req.subject,
+        replyBody: req.body,
+        agentName: "OpsPilot Billing",
+      })
+
+    case "COMPLAINT":
+      return buildCustomerReplyTemplate({
+        customerName: recipientName,
+        originalSubject: req.subject,
+        replyBody: req.body,
+        agentName: "OpsPilot Customer Relations",
+      })
+
+    case "GENERAL":
+      return buildCustomerReplyTemplate({
+        customerName: recipientName,
+        originalSubject: req.subject,
+        replyBody: req.body,
+        agentName: "OpsPilot Support",
       })
 
     case "SUPPLIER_REPLY":
