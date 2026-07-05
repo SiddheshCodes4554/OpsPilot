@@ -57,7 +57,7 @@ export class ManagerAgent {
               id: `${task.id}-step1`,
               type: "STOCK_CHECK",
               description: `Checking stock level for ${sku}`,
-              input: { sku },
+              input: { sku, quantity },
               createdAt: new Date(),
             },
             context
@@ -68,13 +68,14 @@ export class ManagerAgent {
             throw new Error(`Inventory stock check failed: ${stockResult.errors?.join(", ")}`)
           }
 
-          const { needsReplenishment, name, price, productId } = stockResult.output as {
-            needsReplenishment: boolean
+          const { reorder, recommendedQuantity, name, price, productId } = stockResult.output as {
+            reorder: boolean
+            recommendedQuantity: number
             name: string
             price: unknown
             productId: string
           }
-          if (!needsReplenishment) {
+          if (!reorder) {
             log(`Product "${name}" is healthy. No replenishment needed. Concluding workflow.`)
             const result: AgentResult = {
               agentName: this.agentName,
@@ -126,7 +127,7 @@ export class ManagerAgent {
               input: {
                 supplierId: supplier.id,
                 productId,
-                quantity,
+                quantity: recommendedQuantity || quantity,
                 unitPrice: price,
                 etaDays: 5,
               },
