@@ -1,6 +1,7 @@
 import { EmailProvider } from "./types"
 import { ConsoleProvider } from "./providers/ConsoleProvider"
 import { ResendProvider } from "./providers/ResendProvider"
+import { GmailProvider } from "./providers/GmailProvider"
 
 export class EmailService {
   private provider: EmailProvider
@@ -11,15 +12,23 @@ export class EmailService {
 
   /**
    * Factory method to instantiate EmailService based on the environment configuration.
+   *
+   * EMAIL_PROVIDER options:
+   *   "console" — logs emails to stdout (default / dev)
+   *   "gmail"   — sends via Gmail SMTP (no custom domain required)
+   *   "resend"  — sends via Resend API (requires verified custom domain)
    */
   static fromEnv(): EmailService {
     const providerType = (process.env.EMAIL_PROVIDER || "console").toLowerCase()
-    
+
     if (providerType === "resend") {
-      const apiKey = process.env.RESEND_API_KEY
-      return new EmailService(new ResendProvider(apiKey))
+      return new EmailService(new ResendProvider(process.env.RESEND_API_KEY))
     }
-    
+
+    if (providerType === "gmail") {
+      return new EmailService(new GmailProvider())
+    }
+
     return new EmailService(new ConsoleProvider())
   }
 
