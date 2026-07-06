@@ -235,9 +235,9 @@ export async function POST(request: Request) {
   }
 
   // ── 3. Parse payload ───────────────────────────────────────────────────
-  let payload: ResendInboundPayload
+  let payload: InboundPayload
   try {
-    payload = JSON.parse(rawBody) as ResendInboundPayload
+    payload = JSON.parse(rawBody) as InboundPayload
   } catch {
     return NextResponse.json({ error: "Invalid JSON payload" }, { status: 400 })
   }
@@ -246,10 +246,13 @@ export async function POST(request: Request) {
   const isEmailEvent =
     payload.type?.includes("email") ||
     payload.type?.includes("inbound") ||
-    payload.from !== undefined
+    payload.from !== undefined ||
+    payload.envelope !== undefined ||
+    payload.headers !== undefined ||
+    payload.plain !== undefined
 
   if (!isEmailEvent) {
-    return NextResponse.json({ received: true, skipped: true })
+    return NextResponse.json({ received: true, skipped: true, reason: "not_email_event" })
   }
 
   const parsed = parsePayload(payload)
