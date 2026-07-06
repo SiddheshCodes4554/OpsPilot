@@ -4,6 +4,8 @@ import { PageContainer } from "@/components/layout/PageContainer"
 import { Card } from "@/components/ui/card"
 import { prisma } from "@/lib/prisma"
 
+export const dynamic = "force-dynamic"
+
 interface ProcurementPageProps {
   searchParams: Promise<{
     status?: string

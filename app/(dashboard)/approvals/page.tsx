@@ -3,6 +3,8 @@ import { PageContainer } from "@/components/layout/PageContainer"
 import { prisma } from "@/lib/prisma"
 import { ApprovalsClient } from "@/components/approvals/ApprovalsClient"
 
+export const dynamic = "force-dynamic"
+
 export default async function ApprovalsPage() {
   // Fetch all pending approvals from PostgreSQL database
   const approvals = await prisma.approval.findMany({

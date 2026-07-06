@@ -56,8 +56,8 @@ Field details:
   * GENERAL: General conversation, greetings, comments.
   * UNKNOWN: Spam, illegible, or unrecognized intents.
 - "priority": Classification (LOW, MEDIUM, HIGH).
-- "product": Extract product name or SKU if mentioned, else null.
-- "quantity": Extract requested item count if mentioned, else null.
+- "product": Extract product name or SKU if mentioned, else null. IMPORTANT: If multiple products are mentioned, extract only the FIRST product name/SKU as a single string. Do NOT output arrays.
+- "quantity": Extract requested item count if mentioned, else null. IMPORTANT: If multiple quantities are mentioned, extract only the quantity for the first product as a single number. Do NOT output arrays.
 - "urgency": Extracted level of urgency (LOW, MEDIUM, HIGH) based on email tone, language, and deadlines.
 - "confidence": Float between 0.0 and 1.0 representing your classification confidence.`
 

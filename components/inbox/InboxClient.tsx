@@ -50,6 +50,7 @@ interface SimResult {
   orderId?: string
   logs: WorkflowLog[]
   durationMs: number
+  replySent?: boolean
 }
 
 interface SimEmail {
@@ -589,26 +590,38 @@ function ResultPanel({ email, onApproveAndSend, isSending }: ResultPanelProps) {
                   </p>
                 </div>
 
-                {/* Approve & Send */}
+                 {/* Approve & Send */}
                 <button
-                  onClick={() => onApproveAndSend(email)}
-                  disabled={isSending}
+                  onClick={() => !r.replySent && onApproveAndSend(email)}
+                  disabled={isSending || r.replySent}
                   style={{
                     marginTop: "12px",
                     display: "flex", alignItems: "center", gap: "8px",
                     padding: "0 20px", height: "42px", borderRadius: "8px",
-                    background: isSending ? "#27272a" : "linear-gradient(135deg, #10B981 0%, #059669 100%)",
-                    border: "none", cursor: isSending ? "not-allowed" : "pointer",
+                    background: r.replySent
+                      ? "#10B98115"
+                      : isSending
+                        ? "#27272a"
+                        : "linear-gradient(135deg, #10B981 0%, #059669 100%)",
+                    border: r.replySent ? "1px solid #10B98150" : "none",
+                    cursor: (isSending || r.replySent) ? "not-allowed" : "pointer",
                     fontSize: "13px", fontWeight: 700,
-                    color: isSending ? "#52525b" : "#fff",
+                    color: r.replySent
+                      ? "#10B981"
+                      : isSending
+                        ? "#52525b"
+                        : "#fff",
                     width: "100%", justifyContent: "center",
                     transition: "opacity 0.15s",
                   }}
                 >
-                  {isSending
-                    ? <><Loader2 size={14} style={{ animation: "spin 1s linear infinite" }} /> Sending…</>
-                    : <><CheckCheck size={14} /> Approve & Send</>
-                  }
+                  {r.replySent ? (
+                    <><CheckCheck size={14} /> Sent!</>
+                  ) : isSending ? (
+                    <><Loader2 size={14} style={{ animation: "spin 1s linear infinite" }} /> Sending…</>
+                  ) : (
+                    <><CheckCheck size={14} /> Approve & Send</>
+                  )}
                 </button>
               </div>
             )}
@@ -767,7 +780,7 @@ export function InboxClient() {
     if (!email.result?.reply || !email.result.recipient) return
     setIsApproving(true)
     try {
-      await fetch("/api/email/reply", {
+      const res = await fetch("/api/email/reply", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -777,8 +790,20 @@ export function InboxClient() {
           type:      email.result.template ?? "CUSTOMER_REPLY",
         }),
       })
+
+      if (res.ok) {
+        setEmails(prev => prev.map(e => e.id === email.id ? {
+          ...e,
+          result: e.result ? { ...e.result, replySent: true } : null
+        } : e))
+      } else {
+        const data = await res.json()
+        console.error("Outbound reply failed:", data)
+        alert(`Failed to send email: ${data.message || "Unknown error"}`)
+      }
     } catch (err) {
       console.error("Approve & Send failed:", err)
+      alert("Approve & Send failed. See console logs.")
     } finally {
       setIsApproving(false)
     }

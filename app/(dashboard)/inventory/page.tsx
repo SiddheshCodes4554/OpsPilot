@@ -3,6 +3,8 @@ import { PageContainer } from "@/components/layout/PageContainer"
 import { prisma } from "@/lib/prisma"
 import { InventoryClient } from "@/components/inventory/InventoryClient"
 
+export const dynamic = "force-dynamic"
+
 export default async function InventoryPage() {
   // Fetch all suppliers for filter dropdown
   const suppliersList = await prisma.supplier.findMany({

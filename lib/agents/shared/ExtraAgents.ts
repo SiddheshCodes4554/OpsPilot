@@ -15,7 +15,7 @@ async function generateDraftReply(
   const messages = [
     {
       role: "system" as const,
-      content: `${personaPrompt}\nDraft a professional, concise email reply to the customer's email. Output ONLY the response body text. No metadata, subject lines, or markup.`,
+      content: `${personaPrompt}\nDraft a professional, concise email reply to the customer's email. Return the response as a JSON object matching the required schema. Output ONLY valid JSON containing the replyText key.`,
     },
     {
       role: "user" as const,
