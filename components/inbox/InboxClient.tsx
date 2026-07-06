@@ -178,7 +178,7 @@ export function InboxClient() {
         </div>
 
         {/* List */}
-        <div style={{ flex: 1, overflowY: "auto", padding: "10px 0" }}>
+        <div className="custom-scrollbar" style={{ flex: 1, overflowY: "auto", padding: "10px 0" }}>
           {isLoading ? (
             <div style={{ display: "flex", justifyContent: "center", padding: "40px" }}>
               <Loader2 size={20} style={{ animation: "spin 1s linear infinite", color: "#52525b" }} />
@@ -237,7 +237,7 @@ export function InboxClient() {
       </div>
 
       {/* ── Right Column: Email Content Pane ── */}
-      <div style={{ flex: 1, display: "flex", flexDirection: "column", backgroundColor: "#0b0b0d", overflowY: "auto", padding: "24px" }}>
+      <div className="custom-scrollbar" style={{ flex: 1, display: "flex", flexDirection: "column", backgroundColor: "#0b0b0d", overflowY: "auto", padding: "24px" }}>
         {activeEmail ? (
           <div style={{ display: "flex", flexDirection: "column", gap: "20px" }}>
             
@@ -348,6 +348,24 @@ export function InboxClient() {
 
       <style>{`
         @keyframes spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
+        .custom-scrollbar::-webkit-scrollbar {
+          width: 5px;
+          height: 5px;
+        }
+        .custom-scrollbar::-webkit-scrollbar-track {
+          background: transparent;
+        }
+        .custom-scrollbar::-webkit-scrollbar-thumb {
+          background: #1f1f23;
+          border-radius: 4px;
+        }
+        .custom-scrollbar::-webkit-scrollbar-thumb:hover {
+          background: #27272a;
+        }
+        .custom-scrollbar {
+          scrollbar-width: thin;
+          scrollbar-color: #1f1f23 transparent;
+        }
       `}</style>
     </div>
   )
