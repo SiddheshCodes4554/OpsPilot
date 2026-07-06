@@ -10,25 +10,21 @@ OpsPilot coordinates multiple specialized AI subagents through a central Manager
 
 ```mermaid
 flowchart TD
-    subgraph Input [1. Customer Input]
-        Mail[Inbound Customer Email] -->|HTTP Webhook| Router[Cloudmailin Webhook Router]
+    In[Inbound Email] -->|Webhook| Router[Cloudmailin]
+    Router -->|Trigger| Manager[Manager Agent]
+    
+    subgraph Agents [AI Agents]
+        Classifier[Classifier]
+        Inventory[Inventory]
+        Support[Support]
     end
-
-    subgraph Brain [2. Agent Orchestration]
-        Router -->|Async Trigger| Manager[Manager Agent]
-        Manager <-->|Classify Intent & Query Stock| Subagents[AI Agents: Classifier, Inventory, Support]
-    end
-
-    subgraph Data [3. Operations Database]
-        Subagents -->|Query & Update| DB[(Neon PostgreSQL Database)]
-        DB -.->|Restore/Deduct Stock| Inv[Inventory Stock Levels]
-    end
-
-    subgraph Action [4. Outputs & Approvals]
-        Subagents -->|PO Refills / Refund Approvals| AppCenter{Approvals Queue}
-        Subagents -->|Auto-Generated Response| SMTP[Outbound Gmail SMTP Service]
-        AppCenter -->|On Manager Approval| SMTP
-    end
+    
+    Manager <--> Classifier & Inventory & Support
+    Classifier & Inventory & Support --> DB[(PostgreSQL)]
+    
+    DB --> AppCenter{Approvals Queue}
+    DB --> SMTP[Gmail SMTP Service]
+    AppCenter -->|Manager Approved| SMTP
 ```
 
 ---
