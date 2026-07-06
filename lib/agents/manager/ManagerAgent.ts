@@ -104,11 +104,15 @@ export class ManagerAgent implements IAgent {
         process.env.APP_URL ||
         "http://localhost:3000"
 
+      const controller = new AbortController()
+      const timeoutId = setTimeout(() => controller.abort(), 3000)
+
       const res = await fetch(`${baseUrl}/api/email/reply`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(dispatch),
-      })
+        signal: controller.signal,
+      }).finally(() => clearTimeout(timeoutId))
 
       if (!res.ok) {
         const errBody = await res.json().catch(() => ({}))
@@ -121,6 +125,7 @@ export class ManagerAgent implements IAgent {
       console.error("[ManagerAgent] dispatchEmailReply failed (non-fatal):", err)
     }
   }
+
 
   // ---------------------------------------------------------------------------
   // Main orchestration entry point
@@ -392,13 +397,13 @@ export class ManagerAgent implements IAgent {
 
                 log(`Customer Order #${newOrder.id.substring(0, 8).toUpperCase()} placed.`)
 
-                const confirmationBody = `Dear ${customer.name},\n\nYour order for ${orderQty}x ${matchedProduct.name} has been confirmed.\n\nOrder ID: ${newOrder.id}\nTotal: $${orderAmount.toFixed(2)}\n\nWe will notify you once your order ships.\n\nBest regards,\nOpsPilot Operations`
+                const confirmationBody = `Dear ${customer.name},\n\nYour order for ${orderQty}x ${matchedProduct.name} has been confirmed.\n\nOrder ID: ${newOrder.id}\nTotal: ₹${orderAmount.toFixed(2)}\n\nWe will notify you once your order ships.\n\nBest regards,\nOpsPilot Operations`
                 const confirmSubject = `Order Confirmed — ${newOrder.id.substring(0, 8).toUpperCase()}`
 
                 await prisma.notification.create({
                   data: {
                     title: "New Customer Order Placed",
-                    content: `Order placed for ${customer.name}: ${orderQty}x ${matchedProduct.name} (Total: $${orderAmount.toFixed(2)})`,
+                    content: `Order placed for ${customer.name}: ${orderQty}x ${matchedProduct.name} (Total: ₹${orderAmount.toFixed(2)})`,
                   },
                 })
 
@@ -457,7 +462,7 @@ export class ManagerAgent implements IAgent {
                     data: {
                       purchaseOrderId: purchaseOrderDraft.id,
                       status: "PENDING",
-                      comments: "Auto-generated: PO cost exceeds limit ($1,000).",
+                      comments: "Auto-generated: PO cost exceeds limit (₹80,000).",
                     },
                   })
                   log(`Approval request raised for PO ID: ${purchaseOrderDraft.id}`)

@@ -189,7 +189,7 @@ export function OrderConfirmationTemplate({
             </Column>
             <Column style={{ width: "25%", textAlign: "right" as const }}>
               <Text style={{ margin: 0, fontSize: "13px", color: brand.colors.textPrimary, fontWeight: "600" }}>
-                ${(item.quantity * item.unitPrice).toFixed(2)}
+                ₹{(item.quantity * item.unitPrice).toFixed(2)}
               </Text>
             </Column>
           </Row>
@@ -202,11 +202,12 @@ export function OrderConfirmationTemplate({
           <Column style={{ textAlign: "right" as const }}>
             <Text style={{ margin: 0, fontSize: "16px", fontWeight: "700", color: brand.colors.textPrimary }}>
               Total:{" "}
-              <span style={{ color: brand.colors.success }}>${totalAmount.toFixed(2)}</span>
+              <span style={{ color: brand.colors.success }}>₹{totalAmount.toFixed(2)}</span>
             </Text>
           </Column>
         </Row>
       </Section>
+
 
       <Divider margin="24px 0" />
 

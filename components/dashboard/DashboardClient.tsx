@@ -82,7 +82,7 @@ export function DashboardClient({ initialData }: DashboardClientProps) {
             </CardHeader>
             <CardContent className="pt-2">
               <div className="text-2xl font-bold tracking-tight text-zinc-100">
-                ${data.ordersToday.totalAmount.toLocaleString(undefined, {
+                ₹{data.ordersToday.totalAmount.toLocaleString("en-IN", {
                   minimumFractionDigits: 2,
                   maximumFractionDigits: 2,
                 })}
@@ -106,7 +106,7 @@ export function DashboardClient({ initialData }: DashboardClientProps) {
             </CardHeader>
             <CardContent className="pt-2">
               <div className="text-2xl font-bold tracking-tight text-zinc-100">
-                ${data.pendingPurchaseOrders.totalAmount.toLocaleString(undefined, {
+                ₹{data.pendingPurchaseOrders.totalAmount.toLocaleString("en-IN", {
                   minimumFractionDigits: 2,
                   maximumFractionDigits: 2,
                 })}
@@ -151,7 +151,7 @@ export function DashboardClient({ initialData }: DashboardClientProps) {
             </CardHeader>
             <CardContent className="pt-2">
               <div className="text-2xl font-bold tracking-tight text-zinc-100">
-                ${data.businessSnapshot.totalSales.toLocaleString(undefined, {
+                ₹{data.businessSnapshot.totalSales.toLocaleString("en-IN", {
                   minimumFractionDigits: 2,
                   maximumFractionDigits: 2,
                 })}
@@ -161,6 +161,7 @@ export function DashboardClient({ initialData }: DashboardClientProps) {
               </p>
             </CardContent>
           </Card>
+
         </div>
       </Section>
 

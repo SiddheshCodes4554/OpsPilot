@@ -116,7 +116,7 @@ export function ApprovalRequestTemplate({
       <InfoRow label="Type" value={typeLabel} />
       <InfoRow label="Requested by" value={`${requesterName} <${requesterEmail}>`} />
       {amount !== undefined && (
-        <InfoRow label="Amount" value={`$${amount.toFixed(2)}`} />
+        <InfoRow label="Amount" value={`₹${amount.toFixed(2)}`} />
       )}
       {deadlineDisplay && (
         <InfoRow label="Deadline" value={deadlineDisplay} />

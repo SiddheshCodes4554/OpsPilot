@@ -142,7 +142,7 @@ export default async function ProcurementPage({ searchParams }: ProcurementPageP
 
                         {/* Total Amount */}
                         <td className="p-4 font-semibold font-mono text-zinc-300">
-                          ${Number(order.totalAmount).toLocaleString(undefined, {
+                          ₹{Number(order.totalAmount).toLocaleString("en-IN", {
                             minimumFractionDigits: 2,
                             maximumFractionDigits: 2,
                           })}

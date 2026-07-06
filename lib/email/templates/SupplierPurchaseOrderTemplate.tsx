@@ -144,14 +144,14 @@ export function SupplierPurchaseOrderTemplate({
                 {item.quantity}
               </Text>
             </Column>
-            <Column style={{ width: "15%", textAlign: "center" as const }}>
+             <Column style={{ width: "15%", textAlign: "center" as const }}>
               <Text style={{ margin: 0, fontSize: "13px", color: brand.colors.textPrimary }}>
-                ${item.unitPrice.toFixed(2)}
+                ₹{item.unitPrice.toFixed(2)}
               </Text>
             </Column>
             <Column style={{ width: "15%", textAlign: "right" as const }}>
               <Text style={{ margin: 0, fontSize: "13px", color: brand.colors.textPrimary, fontWeight: "600" }}>
-                ${(item.quantity * item.unitPrice).toFixed(2)}
+                ₹{(item.quantity * item.unitPrice).toFixed(2)}
               </Text>
             </Column>
           </Row>
@@ -163,11 +163,12 @@ export function SupplierPurchaseOrderTemplate({
         <Row>
           <Column style={{ textAlign: "right" as const }}>
             <Text style={{ margin: 0, fontSize: "15px", fontWeight: "700", color: brand.colors.textPrimary }}>
-              Total: <span style={{ color: brand.colors.primary }}>${totalAmount.toFixed(2)}</span>
+              Total: <span style={{ color: brand.colors.primary }}>₹{totalAmount.toFixed(2)}</span>
             </Text>
           </Column>
         </Row>
       </Section>
+
 
       {/* Notes */}
       {notes && (

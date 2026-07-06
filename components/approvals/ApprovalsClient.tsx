@@ -138,13 +138,13 @@ export function ApprovalsClient({ initialApprovals }: ApprovalsClientProps) {
                   <div className="flex justify-between">
                     <span className="text-zinc-500">Reason:</span>
                     <span className="text-zinc-300 font-medium text-right max-w-[180px] truncate">
-                      {app.comments || "Exceeds standard limits ($1,000.00)"}
+                      {app.comments || "Exceeds standard limits (₹80,000.00)"}
                     </span>
                   </div>
                   <div className="flex justify-between">
                     <span className="text-zinc-500">Total Price:</span>
                     <span className="text-zinc-200 font-semibold font-mono text-right">
-                      ${totalAmount.toLocaleString(undefined, {
+                      ₹{totalAmount.toLocaleString("en-IN", {
                         minimumFractionDigits: 2,
                         maximumFractionDigits: 2,
                       })}
