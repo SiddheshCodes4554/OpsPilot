@@ -52,9 +52,6 @@ flowchart TD
 - **Customer Refund Safeguards**: Refund requests classified from customer emails automatically create a pending approval request.
 - **Status Sync**: Approving or rejecting updates the respective sales orders, updates inventories, and dispatches confirmation notifications.
 
-### ⚙️ Indian Rupees (₹ / INR) Currency Switch
-- The entire platform metrics (Daily Sales, approvals, PO amounts, catalog retail/wholesale prices) and React-rendered email templates format currency using Indian standard layouts (`₹1,24,500.00`).
-
 ---
 
 ## 🛠️ The Technical Stack
