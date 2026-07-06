@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server"
 import { prisma } from "@/lib/prisma"
 import { z } from "zod"
+import { EmailService } from "@/lib/email/EmailService"
 
 export async function GET() {
   try {
@@ -215,23 +216,78 @@ export async function PUT(req: Request) {
       return tx.order.update({
         where: { id: orderId },
         data: { status: newStatus },
-        include: {
-          customer: true,
-          items: {
-            include: {
-              product: {
-                select: { sku: true, name: true },
-              },
-            },
-          },
-        },
       })
     })
 
+    const fullOrder = await prisma.order.findUnique({
+      where: { id: orderId },
+      include: {
+        customer: true,
+        items: {
+          include: {
+            product: {
+              select: { sku: true, name: true },
+            },
+          },
+        },
+      },
+    })
+
+    if (!fullOrder) {
+      return NextResponse.json({ status: "error", message: "Updated order not found." }, { status: 404 })
+    }
+
+    // Send status update email dynamically
+    try {
+      const emailService = EmailService.fromEnv()
+      const customerName = fullOrder.customer.name
+      const customerEmail = fullOrder.customer.email
+      const orderRef = `ORD-${fullOrder.id.substring(0, 8).toUpperCase()}`
+
+      const itemsList = fullOrder.items
+        .map((item) => `- ${item.quantity}x ${item.product.name} (SKU: ${item.product.sku})`)
+        .join("\n")
+
+      let subject = ""
+      let body = ""
+
+      switch (newStatus) {
+        case "PROCESSING":
+          subject = `Your Order ${orderRef} is now Processing`
+          body = `Dear ${customerName},\n\nGood news! We are now processing your order for the following items:\n\n${itemsList}\n\nWe will notify you with another email once your items have shipped.\n\nBest regards,\nOpsPilot Operations Team`
+          break
+        case "SHIPPED":
+          subject = `Your Order ${orderRef} has Shipped!`
+          body = `Dear ${customerName},\n\nYour order has been shipped from our warehouse! It is on its way to you.\n\nItems shipped:\n\n${itemsList}\n\nThank you for shopping with us!\n\nBest regards,\nOpsPilot Operations Team`
+          break
+        case "DELIVERED":
+          subject = `Your Order ${orderRef} has been Delivered`
+          body = `Dear ${customerName},\n\nOur logistics partner confirms that your order has been successfully delivered. We hope you love your new products!\n\nItems delivered:\n\n${itemsList}\n\nBest regards,\nOpsPilot Operations Team`
+          break
+        case "CANCELLED":
+          subject = `Your Order ${orderRef} has been Cancelled`
+          body = `Dear ${customerName},\n\nYour order has been cancelled. Any reserved stock has been returned to our inventory, and if you were charged, a refund request has been initiated.\n\nBest regards,\nOpsPilot Operations Team`
+          break
+        case "REFUNDED":
+          subject = `Refund Completed for Order ${orderRef}`
+          body = `Dear ${customerName},\n\nWe have successfully completed a full refund of your order. The funds should reflect in your account within 3-5 business days depending on your payment provider.\n\nBest regards,\nOpsPilot Operations Team`
+          break
+        default:
+          subject = `Order ${orderRef} Status Update`
+          body = `Dear ${customerName},\n\nYour order status has been updated to ${newStatus}.\n\nBest regards,\nOpsPilot Operations Team`
+          break
+      }
+
+      await emailService.sendCustomerEmail(customerEmail, subject, body)
+      console.log(`[Order Email] Dynamic status update email sent to ${customerEmail} for status ${newStatus}`)
+    } catch (emailErr) {
+      console.error("[Order Email] Failed to send dynamic status update email:", emailErr)
+    }
+
     const serializedOrder = {
-      ...updatedOrder,
-      totalAmount: Number(updatedOrder.totalAmount),
-      items: updatedOrder.items.map((item) => ({
+      ...fullOrder,
+      totalAmount: Number(fullOrder.totalAmount),
+      items: fullOrder.items.map((item) => ({
         ...item,
         unitPrice: Number(item.unitPrice),
       })),
@@ -239,6 +295,7 @@ export async function PUT(req: Request) {
 
     return NextResponse.json({ status: "success", data: serializedOrder })
   } catch (error) {
+
     console.error("[PUT /api/orders] Error:", error)
     return NextResponse.json(
       { status: "error", message: error instanceof Error ? error.message : "Internal Server Error" },
