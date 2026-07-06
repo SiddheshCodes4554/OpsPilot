@@ -151,31 +151,51 @@ function stripHtml(html: string): string {
   return html.replace(/<[^>]*>/g, " ").replace(/\s+/g, " ").trim()
 }
 
-function parsePayload(raw: InboundPayload): ParsedEmail | null {
-  // ── Cloudmailin format (has `envelope` or `headers` with capitalised keys) ──
-  if (raw.envelope || raw.headers?.From || raw.plain !== undefined) {
-    const cm = raw as CloudmailinPayload
-    const from    = cm.envelope?.from    ?? cm.headers?.From    ?? ""
-    const subject = cm.headers?.Subject  ?? ""
-    const body    = cm.plain             ?? (cm.html ? stripHtml(cm.html) : "")
-    const msgId   = cm.headers?.["Message-ID"]
+/** Extracts a clean email address from "Name <email@domain.com>" format */
+function extractEmail(str: string): string {
+  const clean = str.trim()
+  const match = clean.match(/<([^>]+)>/)
+  return match ? match[1].trim() : clean
+}
 
-    if (!from || !subject || !body) return null
-    return { from: from.trim(), subject: subject.trim(), body: body.trim(), messageId: msgId }
+function parsePayload(raw: InboundPayload): ParsedEmail | null {
+  // Normalize raw.headers keys to lowercase if they exist
+  const headers: Record<string, string> = {}
+  if (raw.headers && typeof raw.headers === "object") {
+    for (const [k, v] of Object.entries(raw.headers)) {
+      if (v !== undefined) {
+        headers[k.toLowerCase()] = String(v)
+      }
+    }
   }
 
-  // ── Resend format (has `data` nested object or top-level fields) ──────────
+  // ── Cloudmailin format ──
+  if (raw.envelope || headers["from"] || raw.plain !== undefined) {
+    const cm = raw as CloudmailinPayload
+    const rawFrom = cm.envelope?.from ?? headers["from"] ?? ""
+    const from    = extractEmail(rawFrom)
+    const subject = headers["subject"] ?? "(No Subject)"
+    const body    = cm.plain ?? (cm.html ? stripHtml(cm.html) : "")
+    const msgId   = headers["message-id"]
+
+    if (!from || !body) return null
+    return { from, subject: subject.trim(), body: body.trim(), messageId: msgId }
+  }
+
+  // ── Resend format ──
   const r = raw as ResendInboundPayload
   const d       = r.data
-  const from    = d?.from    ?? r.from    ?? ""
-  const subject = d?.subject ?? r.subject ?? ""
-  const rawBody = d?.text    ?? r.text    ?? d?.html ?? r.html ?? ""
+  const rawFrom = d?.from ?? r.from ?? ""
+  const from    = extractEmail(rawFrom)
+  const subject = d?.subject ?? r.subject ?? "(No Subject)"
+  const rawBody = d?.text ?? r.text ?? d?.html ?? r.html ?? ""
 
-  if (!from || !subject || !rawBody) return null
+  if (!from || !rawBody) return null
   const body = rawBody.startsWith("<") ? stripHtml(rawBody) : rawBody.trim()
 
-  return { from: from.trim(), subject: subject.trim(), body, messageId: d?.email_id }
+  return { from, subject: subject.trim(), body, messageId: d?.email_id }
 }
+
 
 // ---------------------------------------------------------------------------
 // Route handler
