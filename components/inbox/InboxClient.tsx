@@ -140,14 +140,12 @@ export function InboxClient() {
 
   // Find matching replies for the active email
   const activeReplies = activeEmail
-    ? sentReplies.filter(r => {
-        const cleanSub = activeEmail.subject.replace("Re: ", "").trim().toLowerCase()
-        return (
-          r.recipient.toLowerCase() === activeEmail.sender.toLowerCase() &&
-          r.subject.toLowerCase().includes(cleanSub)
-        )
-      })
+    ? sentReplies.filter(r => 
+        r.recipient.toLowerCase() === activeEmail.sender.toLowerCase() &&
+        new Date(r.createdAt) >= new Date(activeEmail.createdAt)
+      )
     : []
+
 
   const handleSendManualReply = async (e: React.FormEvent) => {
     e.preventDefault()
@@ -191,10 +189,11 @@ export function InboxClient() {
             </div>
           ) : (
             filteredReceived.map(email => {
-              const hasReplied = sentReplies.some(r => {
-                const cleanSub = email.subject.replace("Re: ", "").trim().toLowerCase()
-                return r.recipient.toLowerCase() === email.sender.toLowerCase() && r.subject.toLowerCase().includes(cleanSub)
-              })
+              const hasReplied = sentReplies.some(r => 
+                r.recipient.toLowerCase() === email.sender.toLowerCase() &&
+                new Date(r.createdAt) >= new Date(email.createdAt)
+              )
+
               const isSelected = activeEmail?.id === email.id
 
               return (

@@ -247,16 +247,18 @@ export class ManagerAgent implements IAgent {
 
         // ─────────────────────────────────────────────────────────────────────
         case "CUSTOMER_INQUIRY_WORKFLOW": {
-          const { email, subject, body } = task.input as {
-            email?: string
-            subject?: string
-            body?: string
-          }
-          if (!email || !subject || !body) {
+          const { email } = task.input as { email?: string }
+          let { subject, body } = task.input as { subject?: string; body?: string }
+          
+          if (!email) {
             throw new Error(
-              "Missing required inputs (email, subject, body) for CUSTOMER_INQUIRY_WORKFLOW."
+              "Missing required input (email) for CUSTOMER_INQUIRY_WORKFLOW."
             )
           }
+
+          subject = subject?.trim() || "(No Subject)"
+          body = body?.trim() || "(No Content)"
+
 
           // Step 1: Classify intent via CustomerAgent
           log(`Step 1: Dispatching ANALYZE_EMAIL to CustomerAgent for email from: "${email}"`)
@@ -380,7 +382,7 @@ export class ManagerAgent implements IAgent {
                   return tx.order.create({
                     data: {
                       customerId: customer!.id,
-                      status: "PENDING",
+                      status: "PROCESSING",
                       totalAmount: orderAmount,
                       items: {
                         create: [
@@ -395,7 +397,7 @@ export class ManagerAgent implements IAgent {
                   })
                 })
 
-                log(`Customer Order #${newOrder.id.substring(0, 8).toUpperCase()} placed.`)
+                log(`Customer Order #${newOrder.id.substring(0, 8).toUpperCase()} placed (Status: PROCESSING).`)
 
                 const confirmationBody = `Dear ${customer.name},\n\nYour order for ${orderQty}x ${matchedProduct.name} has been confirmed.\n\nOrder ID: ${newOrder.id}\nTotal: ₹${orderAmount.toFixed(2)}\n\nWe will notify you once your order ships.\n\nBest regards,\nOpsPilot Operations`
                 const confirmSubject = `Order Confirmed — ${newOrder.id.substring(0, 8).toUpperCase()}`
@@ -434,7 +436,26 @@ export class ManagerAgent implements IAgent {
                 this.logger.logSuccess(executionId, 1.0, result.output)
                 return result
               } else {
-                // Stock deficit — procure
+                // Stock deficit — create customer order with status PENDING and trigger replenishment PO
+                const orderAmount = Number(matchedProduct.price) * orderQty
+                const newOrder = await prisma.order.create({
+                  data: {
+                    customerId: customer.id,
+                    status: "PENDING",
+                    totalAmount: orderAmount,
+                    items: {
+                      create: [
+                        {
+                          productId: matchedProduct.id,
+                          quantity: orderQty,
+                          unitPrice: matchedProduct.price,
+                        },
+                      ],
+                    },
+                  },
+                })
+                log(`Customer Order #${newOrder.id.substring(0, 8).toUpperCase()} placed (Status: PENDING due to stock deficit).`)
+
                 log(`Stock deficit. Triggering replenishment PO for quantity: ${recommendedQuantity}`)
                 const procurementResult = await this.procurementAgent.execute(
                   {
@@ -461,11 +482,12 @@ export class ManagerAgent implements IAgent {
                   approvalRecord = await prisma.approval.create({
                     data: {
                       purchaseOrderId: purchaseOrderDraft.id,
+                      orderId: newOrder.id,
                       status: "PENDING",
-                      comments: "Auto-generated: PO cost exceeds limit (₹80,000).",
+                      comments: `Auto-generated: PO cost exceeds limit (₹80,000) to replenish stock shortage for customer Order ORD-${newOrder.id.substring(0, 8).toUpperCase()}`,
                     },
                   })
-                  log(`Approval request raised for PO ID: ${purchaseOrderDraft.id}`)
+                  log(`Approval request raised for PO ID: ${purchaseOrderDraft.id} linked to customer Order ID: ${newOrder.id}`)
                 }
 
                 await prisma.notification.create({
@@ -494,6 +516,7 @@ export class ManagerAgent implements IAgent {
                   output: {
                     workflow: "REPLENISHMENT_TRIGGERED",
                     intent,
+                    orderId: newOrder.id,
                     purchaseOrderId: purchaseOrderDraft?.id,
                     approval: approvalRecord,
                     reply: backorderBody,
@@ -506,6 +529,7 @@ export class ManagerAgent implements IAgent {
                 this.logger.logSuccess(executionId, 1.0, result.output)
                 return result
               }
+
             }
 
             // ── PRODUCT_INQUIRY ────────────────────────────────────────────────
