@@ -21,7 +21,9 @@ export default async function DashboardLayout({
         { label: "Orders",         href: "/orders",      icon: "orders"     },
         { label: "Inventory",      href: "/inventory",   icon: "inventory"  },
         { label: "Procurement",    href: "/procurement", icon: "procurement"},
+        { label: "Suppliers",      href: "/suppliers",   icon: "users"      },
         { label: "Approvals",      href: "/approvals",   icon: "approvals"  },
+
         { label: "Email History",  href: "/emails",      icon: "mail"       },
       ],
     },
