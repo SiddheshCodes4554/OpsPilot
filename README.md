@@ -10,55 +10,25 @@ OpsPilot coordinates multiple specialized AI subagents through a central Manager
 
 ```mermaid
 flowchart TD
-    %% Entities
-    Inbound[Inbound Customer Email]
-    Webhook[Cloudmailin Webhook Router]
-    Manager[Manager Orchestrator Agent]
-    
-    subgraph AgenticTeam [Collaborative AI Agent Team]
-        Classifier[Customer Classifier Agent]
-        StockCheck[Inventory Stock Agent]
-        Procurement[Procurement Refill Agent]
-        Support[Specialist Support Agent]
+    subgraph Input [1. Customer Input]
+        Mail[Inbound Customer Email] -->|HTTP Webhook| Router[Cloudmailin Webhook Router]
     end
 
-    subgraph Operations [Enterprise Database Records]
-        CRM[Neon PostgreSQL CRM]
-        Catalog[Products & Inventory Stock]
-        POs[Purchase Orders Ledger]
-        Approvals[Manager Approval Center]
+    subgraph Brain [2. Agent Orchestration]
+        Router -->|Async Trigger| Manager[Manager Agent]
+        Manager <-->|Classify Intent & Query Stock| Subagents[AI Agents: Classifier, Inventory, Support]
     end
 
-    %% Webhook routing
-    Inbound --> Webhook
-    Webhook -->|Asynchronous waitUntil| Manager
+    subgraph Data [3. Operations Database]
+        Subagents -->|Query & Update| DB[(Neon PostgreSQL Database)]
+        DB -.->|Restore/Deduct Stock| Inv[Inventory Stock Levels]
+    end
 
-    %% Manager routing
-    Manager -->|Step 1: Classify | Classifier
-    Classifier -->|Categorized Intent & Priority| Manager
-
-    %% Action paths
-    Manager -- ORDER --> StockCheck
-    StockCheck -->|Verify stock levels| Catalog
-    
-    StockCheck -- Stock Available --> ConfirmOrder[Confirm & Create Order]
-    ConfirmOrder -->|Deduct stock| Catalog
-    ConfirmOrder -->|Set status to PROCESSING| CRM
-
-    StockCheck -- Stock Shortage --> CreateBackorder[Create Pending Order]
-    CreateBackorder -->|Set status to PENDING| CRM
-    CreateBackorder --> Procurement
-    Procurement -->|Draft wholesale replenishment PO| POs
-    Procurement -->|PO cost > ₹80,000| Approvals
-    
-    Manager -- POLICY INQUIRY / WARRANTY / REFUND --> Support
-    Support -->|Draft context-aware policy response| Manager
-    Support -- REFUND Request --> Approvals
-
-    %% Outbound Dispatch
-    ConfirmOrder --> Dispatch[Outbound Gmail SMTP Service]
-    CreateBackorder --> Dispatch
-    Support --> Dispatch
+    subgraph Action [4. Outputs & Approvals]
+        Subagents -->|PO Refills / Refund Approvals| AppCenter{Approvals Queue}
+        Subagents -->|Auto-Generated Response| SMTP[Outbound Gmail SMTP Service]
+        AppCenter -->|On Manager Approval| SMTP
+    end
 ```
 
 ---
