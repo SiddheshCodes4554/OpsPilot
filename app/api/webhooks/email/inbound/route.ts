@@ -37,11 +37,13 @@ import { prisma } from "@/lib/prisma"
 export const maxDuration = 60
 
 // ---------------------------------------------------------------------------
-// Payload types – Resend inbound email schema
+// ---------------------------------------------------------------------------
+// Payload types
 // ---------------------------------------------------------------------------
 
+/** Resend inbound email payload */
 interface ResendInboundPayload {
-  type: string           // "email.received" | "inbound_email"
+  type?: string
   created_at?: string
   data?: {
     email_id?: string
@@ -52,13 +54,40 @@ interface ResendInboundPayload {
     text?: string
     headers?: Record<string, string>
   }
-  // Some providers send fields at the top level
   from?: string
   to?: string | string[]
   subject?: string
   html?: string
   text?: string
 }
+
+/**
+ * Cloudmailin JSON inbound payload.
+ * Format: https://docs.cloudmailin.com/http_post_formats/json/
+ */
+interface CloudmailinPayload {
+  envelope?: {
+    from?: string
+    to?: string
+    recipients?: string[]
+    helo_domain?: string
+    remote_ip?: string
+  }
+  headers?: {
+    From?: string
+    To?: string
+    Subject?: string
+    "Message-ID"?: string
+    [key: string]: string | undefined
+  }
+  plain?: string
+  html?: string
+  reply_plain?: string
+  attachments?: unknown[]
+}
+
+/** Union type — we try to parse as whichever format matches */
+type InboundPayload = ResendInboundPayload & CloudmailinPayload
 
 // ---------------------------------------------------------------------------
 // Signature verification helpers
@@ -108,28 +137,44 @@ async function verifySvixSignature(
 }
 
 // ---------------------------------------------------------------------------
-// Payload parser — normalises different inbound formats
+// Payload parser — normalises Cloudmailin + Resend into a single shape
 // ---------------------------------------------------------------------------
 
 interface ParsedEmail {
   from: string
   subject: string
   body: string
+  messageId?: string
 }
 
-function parsePayload(payload: ResendInboundPayload): ParsedEmail | null {
-  // Resend standard: data nested under payload.data
-  const d = payload.data
-  const from    = d?.from    ?? payload.from    ?? ""
-  const subject = d?.subject ?? payload.subject ?? ""
-  const body    = d?.text    ?? payload.text    ?? d?.html ?? payload.html ?? ""
+function stripHtml(html: string): string {
+  return html.replace(/<[^>]*>/g, " ").replace(/\s+/g, " ").trim()
+}
 
-  if (!from || !subject || !body) return null
+function parsePayload(raw: InboundPayload): ParsedEmail | null {
+  // ── Cloudmailin format (has `envelope` or `headers` with capitalised keys) ──
+  if (raw.envelope || raw.headers?.From || raw.plain !== undefined) {
+    const cm = raw as CloudmailinPayload
+    const from    = cm.envelope?.from    ?? cm.headers?.From    ?? ""
+    const subject = cm.headers?.Subject  ?? ""
+    const body    = cm.plain             ?? (cm.html ? stripHtml(cm.html) : "")
+    const msgId   = cm.headers?.["Message-ID"]
 
-  // Strip HTML tags if we only have an HTML body
-  const plainBody = body.replace(/<[^>]*>/g, " ").replace(/\s+/g, " ").trim()
+    if (!from || !subject || !body) return null
+    return { from: from.trim(), subject: subject.trim(), body: body.trim(), messageId: msgId }
+  }
 
-  return { from: from.trim(), subject: subject.trim(), body: plainBody }
+  // ── Resend format (has `data` nested object or top-level fields) ──────────
+  const r = raw as ResendInboundPayload
+  const d       = r.data
+  const from    = d?.from    ?? r.from    ?? ""
+  const subject = d?.subject ?? r.subject ?? ""
+  const rawBody = d?.text    ?? r.text    ?? d?.html ?? r.html ?? ""
+
+  if (!from || !subject || !rawBody) return null
+  const body = rawBody.startsWith("<") ? stripHtml(rawBody) : rawBody.trim()
+
+  return { from: from.trim(), subject: subject.trim(), body, messageId: d?.email_id }
 }
 
 // ---------------------------------------------------------------------------
@@ -145,19 +190,25 @@ export async function POST(request: Request) {
   const bearerToken = process.env.INBOUND_WEBHOOK_TOKEN ?? ""
 
   if (!svixSecret && !bearerToken) {
-    console.error("[Inbound Webhook] Neither RESEND_WEBHOOK_SECRET nor INBOUND_WEBHOOK_TOKEN is set.")
-    return NextResponse.json({ error: "Webhook not configured" }, { status: 500 })
-  }
-
-  if (svixSecret) {
+    console.warn("[Inbound Webhook] Running without authentication. Security is disabled.")
+  } else if (svixSecret) {
     const valid = await verifySvixSignature(svixSecret, request.headers, rawBody)
     if (!valid) {
       return NextResponse.json({ error: "Invalid webhook signature" }, { status: 401 })
     }
-  } else {
-    // Fallback: simple bearer token in Authorization header
+  } else if (bearerToken) {
+    // Support both Bearer token and Basic Auth (Cloudmailin uses Basic Auth)
     const authHeader = request.headers.get("authorization") ?? ""
-    const token = authHeader.startsWith("Bearer ") ? authHeader.slice(7) : ""
+    let token = ""
+
+    if (authHeader.startsWith("Bearer ")) {
+      token = authHeader.slice(7)
+    } else if (authHeader.startsWith("Basic ")) {
+      // Basic auth: base64(user:password) — we treat the password as the token
+      const decoded = atob(authHeader.slice(6))
+      token = decoded.split(":")[1] ?? ""
+    }
+
     if (token !== bearerToken) {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 })
     }
