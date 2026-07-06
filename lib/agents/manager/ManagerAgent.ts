@@ -627,17 +627,40 @@ export class ManagerAgent implements IAgent {
               )
               logs.push(...agentResult.logs)
 
-              const { reply } = agentResult.output as { reply: string }
+               const { reply } = agentResult.output as { reply: string }
               const replySubject = `Re: ${subject}`
 
-              // Raise approval record for refund
+              // Attempt to locate matching order reference in email context
+              let matchedOrder = null
+              const combinedText = `${subject} ${body}`
+              const orderMatch = combinedText.match(/ORD-([0-9a-fA-F-]+)/i)
+              if (orderMatch && orderMatch[1]) {
+                const searchRef = orderMatch[1].trim().toLowerCase()
+                const allOrders = await prisma.order.findMany()
+                matchedOrder = allOrders.find((o) =>
+                  o.id.toLowerCase().includes(searchRef) ||
+                  o.id.replace(/-/g, "").toLowerCase().includes(searchRef)
+                )
+              }
+
+              // Fallback to customer's latest order if no reference matches
+              if (!matchedOrder) {
+                matchedOrder = await prisma.order.findFirst({
+                  where: { customerId: customer.id },
+                  orderBy: { createdAt: "desc" },
+                })
+              }
+
+              // Raise approval record for refund linked to the order
               const approvalRecord = await prisma.approval.create({
                 data: {
                   status: "PENDING",
                   comments: `Refund Approval requested for ${customer.name}: ${subject}`,
+                  orderId: matchedOrder ? matchedOrder.id : null,
                 },
               })
-              log(`Refund validation approval requested.`)
+              log(`Refund validation approval requested (Linked Order ID: ${matchedOrder?.id ?? "None"}).`)
+
 
               await prisma.notification.create({
                 data: {
