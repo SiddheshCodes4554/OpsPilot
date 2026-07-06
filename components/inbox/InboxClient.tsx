@@ -1,917 +1,943 @@
 "use client"
 
-import React, { useState } from "react"
-import { Card } from "@/components/ui/card"
+import React, { useState, useRef, useCallback, useEffect } from "react"
 import {
-  Search,
+  Plus,
+  X,
+  Send,
   Sparkles,
+  Loader2,
+  CheckCircle2,
+  XCircle,
   Clock,
-  FileText
+  ChevronRight,
+  Mail,
+  User,
+  AtSign,
+  FileText,
+  Zap,
+  Bot,
+  ShoppingCart,
+  Package,
+  AlertTriangle,
+  MessageSquare,
+  RefreshCw,
+  ArrowUpRight,
+  Info,
+  CheckCheck,
 } from "lucide-react"
 
-export interface EmailWithCustomer {
-  id: string
-  subject: string
-  body: string
-  status: string
-  priority: string
-  sender: string
-  recipient: string
-  createdAt: Date | string
-  customer?: {
-    name: string
-    company?: string | null
-    phone?: string | null
-    email: string
-  } | null
-}
-
-interface InboxClientProps {
-  initialEmails: EmailWithCustomer[]
-}
+// ---------------------------------------------------------------------------
+// Types
+// ---------------------------------------------------------------------------
 
 interface WorkflowLog {
   agentName: string
   level: "INFO" | "WARN" | "ERROR" | "DEBUG"
   message: string
-  timestamp: string
+  timestamp: Date | string
 }
 
-interface AgentState {
-  status: "IDLE" | "PROCESSING" | "SUCCESS" | "FAILED"
-}
+type SimStatus = "idle" | "processing" | "done" | "error"
 
-interface ProcessState {
-  aiStatus: "UNPROCESSED" | "PROCESSING" | "PROCESSED" | "FAILURE"
-  durationMs: number | null
-  confidence: number | null
-  intent: string | null
-  product: string | null
-  quantity: number | null
-  suggestedAction: string | null
+interface SimResult {
+  workflow: string
+  intent: string
+  reply: string | null
+  subject: string | null
+  recipient: string | null
+  template: string | null
+  orderId?: string
   logs: WorkflowLog[]
-  agents: Record<string, AgentState>
-  output: Record<string, unknown> | null
-  approvalNeeded: {
-    id: string
-    comments: string | null
-    type: "REFUND" | "PROCUREMENT"
-  } | null
+  durationMs: number
 }
 
-// Pure helper function declared outside to bypass react-hooks/purity check
-function getNow(): number {
-  return typeof window !== "undefined" ? window.performance.now() : Date.now()
+interface SimEmail {
+  id: string
+  from: string
+  subject: string
+  message: string
+  sentAt: Date
+  status: SimStatus
+  result: SimResult | null
 }
 
-export function InboxClient({ initialEmails }: InboxClientProps) {
-  const [emails] = useState<EmailWithCustomer[]>(initialEmails)
-  const [selectedId, setSelectedId] = useState<string | null>(
-    initialEmails.length > 0 ? initialEmails[0].id : null
-  )
+// ---------------------------------------------------------------------------
+// Constants
+// ---------------------------------------------------------------------------
 
-  const [searchQuery, setSearchQuery] = useState("")
-  const [priorityFilter, setPriorityFilter] = useState("")
-  const [statusFilter, setStatusFilter] = useState("")
+const INTENT_META: Record<string, { label: string; icon: React.ElementType; color: string }> = {
+  ORDER:           { label: "Order",           icon: ShoppingCart,   color: "#10B981" },
+  PRODUCT_INQUIRY: { label: "Product Inquiry",  icon: Package,        color: "#3B82F6" },
+  WARRANTY:        { label: "Warranty",         icon: AlertTriangle,  color: "#F59E0B" },
+  REFUND:          { label: "Refund",           icon: RefreshCw,      color: "#EF4444" },
+  RETURN:          { label: "Return",           icon: ArrowUpRight,   color: "#8B5CF6" },
+  COMPLAINT:       { label: "Complaint",        icon: MessageSquare,  color: "#EC4899" },
+  SUPPLIER:        { label: "Supplier",         icon: ArrowUpRight,   color: "#6366F1" },
+  SHIPPING:        { label: "Shipping",         icon: ArrowUpRight,   color: "#14B8A6" },
+  GENERAL:         { label: "General",          icon: MessageSquare,  color: "#71717a" },
+  UNKNOWN:         { label: "Unknown",          icon: Info,           color: "#52525b" },
+}
 
-  // State maps to track executions per email
-  const [processStates, setProcessStates] = useState<Record<string, ProcessState>>(() => {
-    if (typeof window !== "undefined") {
-      try {
-        const cached = localStorage.getItem("opspilot_inbox_states")
-        return cached ? JSON.parse(cached) : {}
-      } catch (e) {
-        console.error("Failed to load cached process states:", e)
-      }
-    }
-    return {}
-  })
-  const [isRunning, setIsRunning] = useState(false)
-  const [resolvingApproval, setResolvingApproval] = useState(false)
+const WORKFLOW_LABELS: Record<string, string> = {
+  ORDER_PLACED:            "Order Placed",
+  REPLENISHMENT_TRIGGERED: "Replenishment Triggered",
+  ORDER_PRODUCT_NOT_FOUND: "Product Not Found",
+  PRODUCT_INQUIRY_RESPONDED: "Inquiry Answered",
+  WARRANTY_RESPONDED:      "Warranty Addressed",
+  REFUND_APPROVAL_RAISED:  "Refund → Approval",
+  RETURN_RESPONDED:        "Return Processed",
+  COMPLAINT_RESPONDED:     "Complaint Resolved",
+  SUPPLIER_REPLY_PROCESSED:"Supplier Reply Logged",
+  GENERAL_RESPONDED:       "General Reply Sent",
+  ESCALATED_TO_OWNER:      "Escalated to Owner",
+}
 
-  const selectedEmail = emails.find((e) => e.id === selectedId)
+const EXAMPLE_EMAILS = [
+  { from: "john.doe@example.com",   subject: "Order Request",          message: "Hi, I'd like to order 3 units of Product A (SKU: PROD-001) please." },
+  { from: "jane.smith@example.com", subject: "Warranty Claim",         message: "My device stopped working after 2 months. Can I claim warranty?" },
+  { from: "mike@acme.com",          subject: "Product Specifications",  message: "Could you send me the technical specs for your latest industrial sensors?" },
+  { from: "lisa@corp.com",          subject: "Refund Request",         message: "I received the wrong item and need a full refund for order #ORD-12345." },
+  { from: "supplier@logistics.com", subject: "PO Confirmation",        message: "We confirm receipt of your Purchase Order. Delivery expected in 5–7 days." },
+]
 
-  // Sync process states to localStorage
-  const saveProcessStates = (
-    updater:
-      | Record<string, ProcessState>
-      | ((prev: Record<string, ProcessState>) => Record<string, ProcessState>)
-  ) => {
-    setProcessStates((prev) => {
-      const nextStates = typeof updater === "function" ? updater(prev) : updater
-      try {
-        localStorage.setItem("opspilot_inbox_states", JSON.stringify(nextStates))
-      } catch (e) {
-        console.error("Failed to cache process states:", e)
-      }
-      return nextStates
-    })
+// ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
+
+function formatTime(d: Date | string): string {
+  const dt = typeof d === "string" ? new Date(d) : d
+  return dt.toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit", second: "2-digit" })
+}
+
+function formatRelative(d: Date): string {
+  const diff = Date.now() - d.getTime()
+  const s = Math.floor(diff / 1000)
+  if (s < 60) return `${s}s ago`
+  const m = Math.floor(s / 60)
+  if (m < 60) return `${m}m ago`
+  return `${Math.floor(m / 60)}h ago`
+}
+
+function levelColor(level: string): string {
+  if (level === "ERROR") return "#EF4444"
+  if (level === "WARN")  return "#F59E0B"
+  if (level === "DEBUG") return "#6366F1"
+  return "#10B981"
+}
+
+// ---------------------------------------------------------------------------
+// Compose Modal
+// ---------------------------------------------------------------------------
+
+interface ComposeModalProps {
+  onClose: () => void
+  onSend: (from: string, subject: string, message: string) => void
+  isSending: boolean
+}
+
+function ComposeModal({ onClose, onSend, isSending }: ComposeModalProps) {
+  const [from, setFrom]       = useState("")
+  const [subject, setSubject] = useState("")
+  const [message, setMessage] = useState("")
+
+  const loadExample = (ex: typeof EXAMPLE_EMAILS[0]) => {
+    setFrom(ex.from)
+    setSubject(ex.subject)
+    setMessage(ex.message)
   }
 
-  const handleProcessEmail = async (email: EmailWithCustomer) => {
-    if (isRunning) return
+  const canSend = from.trim() && subject.trim() && message.trim() && !isSending
 
-    setIsRunning(true)
+  return (
+    <div
+      onClick={e => e.target === e.currentTarget && onClose()}
+      style={{
+        position: "fixed", inset: 0, zIndex: 50,
+        backgroundColor: "rgba(0,0,0,0.7)",
+        backdropFilter: "blur(4px)",
+        display: "flex", alignItems: "center", justifyContent: "center",
+        padding: "20px",
+      }}
+    >
+      <div style={{
+        width: "100%", maxWidth: "600px",
+        backgroundColor: "#111113",
+        border: "1px solid #27272a",
+        borderRadius: "12px",
+        boxShadow: "0 25px 50px rgba(0,0,0,0.6)",
+        overflow: "hidden",
+      }}>
+        {/* Header */}
+        <div style={{
+          display: "flex", alignItems: "center", justifyContent: "space-between",
+          padding: "16px 20px",
+          borderBottom: "1px solid #27272a",
+        }}>
+          <div style={{ display: "flex", alignItems: "center", gap: "10px" }}>
+            <div style={{
+              width: "32px", height: "32px", borderRadius: "8px",
+              background: "linear-gradient(135deg, #3B82F6 0%, #8B5CF6 100%)",
+              display: "flex", alignItems: "center", justifyContent: "center",
+            }}>
+              <Sparkles size={16} color="#fff" />
+            </div>
+            <div>
+              <p style={{ margin: 0, fontSize: "14px", fontWeight: 700, color: "#f4f4f5" }}>
+                Simulate Incoming Email
+              </p>
+              <p style={{ margin: 0, fontSize: "11px", color: "#52525b" }}>
+                Processed by ManagerAgent in real-time
+              </p>
+            </div>
+          </div>
+          <button
+            onClick={onClose}
+            style={{ background: "none", border: "none", cursor: "pointer", color: "#52525b", padding: "4px" }}
+          >
+            <X size={16} />
+          </button>
+        </div>
 
-    const initialAgentStates: Record<string, AgentState> = {
-      CustomerAgent: { status: "PROCESSING" },
-      InventoryAgent: { status: "IDLE" },
-      ProcurementAgent: { status: "IDLE" },
-      SupplierAgent: { status: "IDLE" },
-      ManagerAgent: { status: "PROCESSING" },
+        {/* Quick examples */}
+        <div style={{ padding: "12px 20px", borderBottom: "1px solid #18181b" }}>
+          <p style={{ fontSize: "10px", color: "#3f3f46", fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.4px", margin: "0 0 8px 0" }}>
+            Quick Examples
+          </p>
+          <div style={{ display: "flex", flexWrap: "wrap", gap: "6px" }}>
+            {EXAMPLE_EMAILS.map((ex, i) => (
+              <button
+                key={i}
+                onClick={() => loadExample(ex)}
+                style={{
+                  padding: "4px 10px", borderRadius: "6px",
+                  border: "1px solid #27272a", backgroundColor: "#18181b",
+                  fontSize: "11px", color: "#a1a1aa", cursor: "pointer",
+                  transition: "all 0.15s",
+                }}
+                onMouseEnter={e => {
+                  (e.currentTarget as HTMLButtonElement).style.borderColor = "#3B82F6"
+                  ;(e.currentTarget as HTMLButtonElement).style.color = "#3B82F6"
+                }}
+                onMouseLeave={e => {
+                  (e.currentTarget as HTMLButtonElement).style.borderColor = "#27272a"
+                  ;(e.currentTarget as HTMLButtonElement).style.color = "#a1a1aa"
+                }}
+              >
+                {ex.subject}
+              </button>
+            ))}
+          </div>
+        </div>
+
+        {/* Form */}
+        <div style={{ padding: "20px", display: "flex", flexDirection: "column", gap: "14px" }}>
+          {/* From */}
+          <div>
+            <label style={{ fontSize: "11px", fontWeight: 600, color: "#71717a", textTransform: "uppercase", letterSpacing: "0.4px", display: "block", marginBottom: "6px" }}>
+              From (Sender Email)
+            </label>
+            <div style={{
+              display: "flex", alignItems: "center", gap: "8px",
+              backgroundColor: "#18181b", border: "1px solid #27272a",
+              borderRadius: "8px", padding: "0 12px", height: "40px",
+            }}>
+              <AtSign size={13} color="#52525b" />
+              <input
+                type="email"
+                placeholder="customer@example.com"
+                value={from}
+                onChange={e => setFrom(e.target.value)}
+                style={{
+                  flex: 1, background: "none", border: "none", outline: "none",
+                  fontSize: "13px", color: "#d4d4d8",
+                }}
+              />
+            </div>
+          </div>
+
+          {/* Subject */}
+          <div>
+            <label style={{ fontSize: "11px", fontWeight: 600, color: "#71717a", textTransform: "uppercase", letterSpacing: "0.4px", display: "block", marginBottom: "6px" }}>
+              Subject
+            </label>
+            <div style={{
+              display: "flex", alignItems: "center", gap: "8px",
+              backgroundColor: "#18181b", border: "1px solid #27272a",
+              borderRadius: "8px", padding: "0 12px", height: "40px",
+            }}>
+              <FileText size={13} color="#52525b" />
+              <input
+                type="text"
+                placeholder="Email subject line…"
+                value={subject}
+                onChange={e => setSubject(e.target.value)}
+                style={{
+                  flex: 1, background: "none", border: "none", outline: "none",
+                  fontSize: "13px", color: "#d4d4d8",
+                }}
+              />
+            </div>
+          </div>
+
+          {/* Message */}
+          <div>
+            <label style={{ fontSize: "11px", fontWeight: 600, color: "#71717a", textTransform: "uppercase", letterSpacing: "0.4px", display: "block", marginBottom: "6px" }}>
+              Message
+            </label>
+            <textarea
+              placeholder="Write the email body here…"
+              value={message}
+              onChange={e => setMessage(e.target.value)}
+              rows={5}
+              style={{
+                width: "100%", backgroundColor: "#18181b",
+                border: "1px solid #27272a", borderRadius: "8px",
+                padding: "12px", fontSize: "13px", color: "#d4d4d8",
+                resize: "vertical", outline: "none", boxSizing: "border-box",
+                fontFamily: "inherit", lineHeight: "1.5",
+              }}
+            />
+          </div>
+
+          {/* Footer */}
+          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", paddingTop: "4px" }}>
+            <p style={{ fontSize: "11px", color: "#3f3f46", margin: 0 }}>
+              Processed by ManagerAgent · Results appear instantly
+            </p>
+            <button
+              onClick={() => canSend && onSend(from.trim(), subject.trim(), message.trim())}
+              disabled={!canSend}
+              style={{
+                display: "flex", alignItems: "center", gap: "8px",
+                padding: "0 20px", height: "40px", borderRadius: "8px",
+                background: canSend
+                  ? "linear-gradient(135deg, #3B82F6 0%, #8B5CF6 100%)"
+                  : "#27272a",
+                border: "none", cursor: canSend ? "pointer" : "not-allowed",
+                fontSize: "13px", fontWeight: 700, color: canSend ? "#fff" : "#52525b",
+                transition: "opacity 0.15s",
+              }}
+            >
+              {isSending ? <Loader2 size={14} style={{ animation: "spin 1s linear infinite" }} /> : <Sparkles size={14} />}
+              {isSending ? "Processing…" : "Send to AI"}
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+// ---------------------------------------------------------------------------
+// Email result detail panel
+// ---------------------------------------------------------------------------
+
+interface ResultPanelProps {
+  email: SimEmail
+  onApproveAndSend: (email: SimEmail) => void
+  isSending: boolean
+}
+
+function ResultPanel({ email, onApproveAndSend, isSending }: ResultPanelProps) {
+  const r = email.result
+  const intentMeta = r ? (INTENT_META[r.intent] ?? INTENT_META.UNKNOWN) : null
+  const IntentIcon = intentMeta?.icon ?? Bot
+
+  return (
+    <div style={{
+      display: "flex", flexDirection: "column", height: "100%",
+      overflow: "hidden", backgroundColor: "#0d0d0f",
+    }}>
+      {/* Header */}
+      <div style={{ padding: "20px", borderBottom: "1px solid #18181b", flexShrink: 0 }}>
+        <div style={{ display: "flex", alignItems: "flex-start", gap: "12px" }}>
+          <div style={{
+            width: "40px", height: "40px", borderRadius: "10px", flexShrink: 0,
+            backgroundColor: "#18181b", border: "1px solid #27272a",
+            display: "flex", alignItems: "center", justifyContent: "center",
+          }}>
+            <User size={18} color="#52525b" />
+          </div>
+          <div style={{ flex: 1, minWidth: 0 }}>
+            <p style={{ margin: "0 0 2px 0", fontSize: "14px", fontWeight: 700, color: "#f4f4f5" }}>
+              {email.subject}
+            </p>
+            <p style={{ margin: 0, fontSize: "12px", color: "#52525b" }}>
+              {email.from} · {formatRelative(email.sentAt)}
+            </p>
+          </div>
+          {/* Status pill */}
+          <div style={{
+            display: "flex", alignItems: "center", gap: "5px",
+            padding: "4px 10px", borderRadius: "20px",
+            backgroundColor: email.status === "done"       ? "#10B98120"
+                           : email.status === "processing" ? "#3B82F620"
+                           : email.status === "error"      ? "#EF444420"
+                           : "#27272a",
+            border: `1px solid ${email.status === "done"       ? "#10B98140"
+                                : email.status === "processing" ? "#3B82F640"
+                                : email.status === "error"      ? "#EF444440"
+                                : "#27272a"}`,
+          }}>
+            {email.status === "done"       && <CheckCircle2 size={12} color="#10B981" />}
+            {email.status === "processing" && <Loader2 size={12} color="#3B82F6" style={{ animation: "spin 1s linear infinite" }} />}
+            {email.status === "error"      && <XCircle size={12} color="#EF4444" />}
+            {email.status === "idle"       && <Clock size={12} color="#71717a" />}
+            <span style={{
+              fontSize: "11px", fontWeight: 700,
+              color: email.status === "done"       ? "#10B981"
+                   : email.status === "processing" ? "#3B82F6"
+                   : email.status === "error"      ? "#EF4444"
+                   : "#71717a",
+            }}>
+              {email.status === "done" ? "Completed" : email.status === "processing" ? "Processing…" : email.status === "error" ? "Failed" : "Queued"}
+            </span>
+          </div>
+        </div>
+
+        {/* Original message */}
+        <div style={{
+          marginTop: "14px", padding: "12px", borderRadius: "8px",
+          backgroundColor: "#18181b", border: "1px solid #27272a",
+        }}>
+          <p style={{ fontSize: "11px", color: "#52525b", fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.4px", margin: "0 0 6px 0" }}>
+            Original Message
+          </p>
+          <p style={{ fontSize: "13px", color: "#a1a1aa", margin: 0, lineHeight: "20px", whiteSpace: "pre-wrap" }}>
+            {email.message}
+          </p>
+        </div>
+      </div>
+
+      <div style={{ flex: 1, overflowY: "auto", padding: "20px", display: "flex", flexDirection: "column", gap: "20px" }}>
+
+        {/* Processing state */}
+        {email.status === "processing" && (
+          <div style={{
+            display: "flex", alignItems: "center", gap: "12px",
+            padding: "16px", borderRadius: "10px",
+            backgroundColor: "#18181b", border: "1px solid #3B82F630",
+          }}>
+            <div style={{
+              width: "36px", height: "36px", borderRadius: "8px",
+              background: "linear-gradient(135deg, #3B82F6 0%, #8B5CF6 100%)",
+              display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0,
+            }}>
+              <Loader2 size={18} color="#fff" style={{ animation: "spin 1s linear infinite" }} />
+            </div>
+            <div>
+              <p style={{ margin: 0, fontSize: "13px", fontWeight: 600, color: "#f4f4f5" }}>
+                ManagerAgent is running…
+              </p>
+              <p style={{ margin: "2px 0 0 0", fontSize: "11px", color: "#52525b" }}>
+                Classifying intent · Routing workflow · Dispatching agents
+              </p>
+            </div>
+          </div>
+        )}
+
+        {/* Results */}
+        {r && (
+          <>
+            {/* Intent + Workflow row */}
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "10px" }}>
+              <div style={{
+                padding: "14px", borderRadius: "10px",
+                backgroundColor: "#18181b", border: "1px solid #27272a",
+              }}>
+                <p style={{ fontSize: "10px", color: "#52525b", fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.4px", margin: "0 0 8px 0" }}>
+                  Intent
+                </p>
+                <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+                  <div style={{
+                    width: "28px", height: "28px", borderRadius: "6px",
+                    backgroundColor: (intentMeta?.color ?? "#52525b") + "20",
+                    display: "flex", alignItems: "center", justifyContent: "center",
+                  }}>
+                    <IntentIcon size={14} color={intentMeta?.color ?? "#52525b"} />
+                  </div>
+                  <span style={{ fontSize: "13px", fontWeight: 700, color: "#f4f4f5" }}>
+                    {intentMeta?.label ?? r.intent}
+                  </span>
+                </div>
+              </div>
+
+              <div style={{
+                padding: "14px", borderRadius: "10px",
+                backgroundColor: "#18181b", border: "1px solid #27272a",
+              }}>
+                <p style={{ fontSize: "10px", color: "#52525b", fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.4px", margin: "0 0 8px 0" }}>
+                  Workflow
+                </p>
+                <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+                  <div style={{
+                    width: "28px", height: "28px", borderRadius: "6px",
+                    backgroundColor: "#10B98120",
+                    display: "flex", alignItems: "center", justifyContent: "center",
+                  }}>
+                    <Zap size={14} color="#10B981" />
+                  </div>
+                  <span style={{ fontSize: "12px", fontWeight: 600, color: "#10B981" }}>
+                    {WORKFLOW_LABELS[r.workflow] ?? r.workflow}
+                  </span>
+                </div>
+              </div>
+            </div>
+
+            {/* Duration */}
+            <div style={{
+              display: "flex", alignItems: "center", gap: "6px",
+              padding: "8px 12px", borderRadius: "6px",
+              backgroundColor: "#18181b", border: "1px solid #27272a",
+            }}>
+              <Clock size={12} color="#52525b" />
+              <span style={{ fontSize: "11px", color: "#71717a" }}>
+                Completed in <strong style={{ color: "#a1a1aa" }}>{(r.durationMs / 1000).toFixed(2)}s</strong>
+              </span>
+              {r.orderId && (
+                <>
+                  <span style={{ color: "#27272a", margin: "0 4px" }}>·</span>
+                  <span style={{ fontSize: "11px", color: "#71717a" }}>
+                    Order ID: <strong style={{ color: "#a1a1aa", fontFamily: "monospace" }}>{r.orderId.substring(0, 12).toUpperCase()}</strong>
+                  </span>
+                </>
+              )}
+            </div>
+
+            {/* Workflow timeline */}
+            {r.logs.length > 0 && (
+              <div>
+                <p style={{ fontSize: "10px", color: "#52525b", fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.4px", margin: "0 0 10px 0" }}>
+                  Workflow Timeline
+                </p>
+                <div style={{
+                  backgroundColor: "#0a0a0b", borderRadius: "8px",
+                  border: "1px solid #18181b", overflow: "hidden",
+                }}>
+                  {r.logs.map((log, i) => (
+                    <div
+                      key={i}
+                      style={{
+                        display: "flex", alignItems: "flex-start", gap: "10px",
+                        padding: "8px 12px",
+                        borderBottom: i < r.logs.length - 1 ? "1px solid #18181b" : "none",
+                      }}
+                    >
+                      {/* Agent dot */}
+                      <div style={{
+                        width: "6px", height: "6px", borderRadius: "50%",
+                        backgroundColor: levelColor(log.level),
+                        marginTop: "5px", flexShrink: 0,
+                      }} />
+                      <div style={{ flex: 1, minWidth: 0 }}>
+                        <div style={{ display: "flex", alignItems: "center", gap: "6px", marginBottom: "2px" }}>
+                          <span style={{ fontSize: "10px", fontWeight: 700, color: "#52525b", fontFamily: "monospace" }}>
+                            {log.agentName}
+                          </span>
+                          <span style={{
+                            fontSize: "9px", fontWeight: 700,
+                            padding: "1px 4px", borderRadius: "3px",
+                            backgroundColor: levelColor(log.level) + "20",
+                            color: levelColor(log.level),
+                            textTransform: "uppercase", letterSpacing: "0.3px",
+                          }}>
+                            {log.level}
+                          </span>
+                          <span style={{ fontSize: "10px", color: "#3f3f46", marginLeft: "auto" }}>
+                            {formatTime(log.timestamp)}
+                          </span>
+                        </div>
+                        <p style={{ margin: 0, fontSize: "12px", color: "#71717a", lineHeight: "18px" }}>
+                          {log.message}
+                        </p>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {/* Draft reply */}
+            {r.reply && (
+              <div>
+                <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: "10px" }}>
+                  <p style={{ fontSize: "10px", color: "#52525b", fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.4px", margin: 0 }}>
+                    AI Draft Reply
+                  </p>
+                  {r.template && (
+                    <span style={{
+                      fontSize: "10px", fontWeight: 600, padding: "2px 6px", borderRadius: "4px",
+                      backgroundColor: "#8B5CF620", color: "#8B5CF6",
+                      border: "1px solid #8B5CF640",
+                    }}>
+                      {r.template.replace(/_/g, " ")}
+                    </span>
+                  )}
+                </div>
+                <div style={{
+                  backgroundColor: "#18181b", borderRadius: "8px",
+                  border: "1px solid #27272a", padding: "14px",
+                }}>
+                  {r.subject && (
+                    <p style={{ fontSize: "11px", color: "#52525b", margin: "0 0 8px 0", fontWeight: 600 }}>
+                      Subject: <span style={{ color: "#a1a1aa", fontWeight: 400 }}>{r.subject}</span>
+                    </p>
+                  )}
+                  <p style={{ fontSize: "13px", color: "#d4d4d8", margin: 0, lineHeight: "22px", whiteSpace: "pre-wrap" }}>
+                    {r.reply}
+                  </p>
+                </div>
+
+                {/* Approve & Send */}
+                <button
+                  onClick={() => onApproveAndSend(email)}
+                  disabled={isSending}
+                  style={{
+                    marginTop: "12px",
+                    display: "flex", alignItems: "center", gap: "8px",
+                    padding: "0 20px", height: "42px", borderRadius: "8px",
+                    background: isSending ? "#27272a" : "linear-gradient(135deg, #10B981 0%, #059669 100%)",
+                    border: "none", cursor: isSending ? "not-allowed" : "pointer",
+                    fontSize: "13px", fontWeight: 700,
+                    color: isSending ? "#52525b" : "#fff",
+                    width: "100%", justifyContent: "center",
+                    transition: "opacity 0.15s",
+                  }}
+                >
+                  {isSending
+                    ? <><Loader2 size={14} style={{ animation: "spin 1s linear infinite" }} /> Sending…</>
+                    : <><CheckCheck size={14} /> Approve & Send</>
+                  }
+                </button>
+              </div>
+            )}
+
+            {/* No reply case (escalated / supplier processed) */}
+            {!r.reply && (
+              <div style={{
+                padding: "16px", borderRadius: "10px",
+                backgroundColor: "#18181b", border: "1px solid #27272a",
+                display: "flex", alignItems: "center", gap: "10px",
+              }}>
+                <CheckCircle2 size={18} color="#10B981" />
+                <p style={{ margin: 0, fontSize: "13px", color: "#a1a1aa" }}>
+                  Workflow completed. {r.workflow === "ESCALATED_TO_OWNER"
+                    ? "Email escalated to owner for review."
+                    : "No customer reply required for this workflow."}
+                </p>
+              </div>
+            )}
+          </>
+        )}
+      </div>
+    </div>
+  )
+}
+
+// ---------------------------------------------------------------------------
+// Empty state
+// ---------------------------------------------------------------------------
+
+function EmptyState({ onNew }: { onNew: () => void }) {
+  return (
+    <div style={{
+      flex: 1, display: "flex", flexDirection: "column",
+      alignItems: "center", justifyContent: "center",
+      gap: "16px", padding: "48px",
+    }}>
+      <div style={{
+        width: "64px", height: "64px", borderRadius: "16px",
+        background: "linear-gradient(135deg, #3B82F620 0%, #8B5CF620 100%)",
+        border: "1px solid #3B82F630",
+        display: "flex", alignItems: "center", justifyContent: "center",
+      }}>
+        <Sparkles size={28} color="#3B82F6" />
+      </div>
+      <div style={{ textAlign: "center" }}>
+        <p style={{ fontSize: "16px", fontWeight: 700, color: "#f4f4f5", margin: "0 0 6px 0" }}>
+          AI Operations Workspace
+        </p>
+        <p style={{ fontSize: "13px", color: "#52525b", margin: 0, maxWidth: "320px", lineHeight: "20px" }}>
+          Simulate incoming emails and watch ManagerAgent classify intent, route workflows, and generate replies in real time.
+        </p>
+      </div>
+      <button
+        onClick={onNew}
+        style={{
+          display: "flex", alignItems: "center", gap: "8px",
+          padding: "0 20px", height: "40px", borderRadius: "8px",
+          background: "linear-gradient(135deg, #3B82F6 0%, #8B5CF6 100%)",
+          border: "none", cursor: "pointer",
+          fontSize: "13px", fontWeight: 700, color: "#fff",
+        }}
+      >
+        <Plus size={14} />
+        Simulate Incoming Email
+      </button>
+    </div>
+  )
+}
+
+// ---------------------------------------------------------------------------
+// Main InboxClient
+// ---------------------------------------------------------------------------
+
+export function InboxClient() {
+  const [emails, setEmails]           = useState<SimEmail[]>([])
+  const [selectedId, setSelectedId]   = useState<string | null>(null)
+  const [showCompose, setShowCompose] = useState(false)
+  const [isSending, setIsSending]     = useState(false)
+  const [isApproving, setIsApproving] = useState(false)
+
+  const selectedEmail = emails.find(e => e.id === selectedId) ?? null
+
+  const handleSendToAI = useCallback(async (from: string, subject: string, message: string) => {
+    setIsSending(true)
+    const id = `sim-${Date.now()}`
+    const newEmail: SimEmail = {
+      id, from, subject, message,
+      sentAt: new Date(),
+      status: "processing",
+      result: null,
     }
 
-    const tStart = getNow()
+    setEmails(prev => [newEmail, ...prev])
+    setSelectedId(id)
+    setShowCompose(false)
+    setIsSending(false)
 
-    saveProcessStates({
-      ...processStates,
-      [email.id]: {
-        aiStatus: "PROCESSING",
-        durationMs: null,
-        confidence: null,
-        intent: null,
-        product: null,
-        quantity: null,
-        suggestedAction: null,
-        logs: [],
-        agents: initialAgentStates,
-        output: null,
-        approvalNeeded: null,
-      },
-    })
+    const startMs = Date.now()
 
     try {
       const res = await fetch("/api/manager/run", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          sender: email.sender,
-          subject: email.subject,
-          body: email.body,
-        }),
+        body: JSON.stringify({ sender: from, subject, body: message }),
       })
 
-      const data = (await res.json()) as Record<string, unknown>
-      const tEnd = getNow()
-      const durationMs = Math.round(tEnd - tStart)
+      const data = await res.json()
+      const durationMs = Date.now() - startMs
 
-      if (data.status === "error" || res.status >= 400) {
-        throw new Error((data.message as string) || "Manager routing failed.")
-      }
-
-      // Extract details
-      const logs: WorkflowLog[] = (data.logs as WorkflowLog[]) || []
-      const intent = (data.intent as string) || null
-      const product = (data.product as string) || null
-      const quantity = (data.quantity as number) || null
-
-      let confidence = 0.95
-      const customerSuccessLog = logs.find(
-        (log) => log.agentName === "CustomerAgent" && log.message.includes("confidence")
-      )
-      if (customerSuccessLog) {
-        const match = customerSuccessLog.message.match(/confidence:\s*([\d.]+)/i)
-        if (match) confidence = parseFloat(match[1])
-      }
-
-      // Map suggested actions by intent
-      let suggestedAction = "Respond to general inquiry"
-      if (intent === "ORDER") suggestedAction = "Validate and place order"
-      else if (intent === "PRODUCT_INQUIRY") suggestedAction = "Draft specifications answer"
-      else if (intent === "WARRANTY") suggestedAction = "Process warranty policy check"
-      else if (intent === "REFUND") suggestedAction = "Request refund approval"
-      else if (intent === "RETURN") suggestedAction = "Generate return RMA label"
-      else if (intent === "COMPLAINT") suggestedAction = "Draft support reconciliation response"
-      else if (intent === "SUPPLIER") suggestedAction = "Analyze supplier wholesale confirmation"
-
-      // Check if approval record was created
-      let approvalNeeded: { id: string; comments: string | null; type: "REFUND" | "PROCUREMENT" } | null = null
-      if (data.approval) {
-        const appRecord = data.approval as { id: string; comments: string | null }
-        approvalNeeded = {
-          id: appRecord.id,
-          comments: appRecord.comments,
-          type: intent === "REFUND" ? "REFUND" : "PROCUREMENT",
-        }
-      }
-
-      // Simulate sequential agent execution animations
-      await simulateAgentCompletion(
-        email.id,
-        logs,
-        intent || "UNKNOWN",
-        product,
-        quantity,
-        data,
-        durationMs,
-        confidence,
-        suggestedAction,
-        approvalNeeded
-      )
-
-    } catch (error) {
-      console.error("[ProcessWithAI] Error:", error)
-      const tEnd = getNow()
-      const msg = error instanceof Error ? error.message : String(error)
-
-      saveProcessStates({
-        ...processStates,
-        [email.id]: {
-          aiStatus: "FAILURE",
-          durationMs: Math.round(tEnd - tStart),
-          confidence: 0,
-          intent: "UNKNOWN",
-          product: null,
-          quantity: null,
-          suggestedAction: "Escalate to administrator review",
-          logs: [
-            {
-              agentName: "ManagerAgent",
-              level: "ERROR",
-              message: msg,
-              timestamp: new Date().toISOString(),
-            },
-          ],
-          agents: {
-            CustomerAgent: { status: "FAILED" },
-            InventoryAgent: { status: "IDLE" },
-            ProcurementAgent: { status: "IDLE" },
-            SupplierAgent: { status: "IDLE" },
-            ManagerAgent: { status: "FAILED" },
-          },
-          output: { error: msg },
-          approvalNeeded: null,
-        },
-      })
-    } finally {
-      setIsRunning(false)
-    }
-  }
-
-  // Sequentially animate statuses to represent real-time multi-agent activity
-  const simulateAgentCompletion = async (
-    emailId: string,
-    logs: WorkflowLog[],
-    intent: string,
-    product: string | null,
-    quantity: number | null,
-    output: Record<string, unknown>,
-    durationMs: number,
-    confidence: number,
-    suggestedAction: string,
-    approvalNeeded: { id: string; comments: string | null; type: "REFUND" | "PROCUREMENT" } | null
-  ) => {
-    const delay = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms))
-
-    // Step 1: CustomerAgent completes
-    saveProcessStates((prev) => ({
-      ...prev,
-      [emailId]: {
-        ...prev[emailId],
-        logs: logs.filter((l) => l.agentName === "CustomerAgent" || l.agentName === "ManagerAgent"),
-        agents: {
-          CustomerAgent: { status: "SUCCESS" },
-          InventoryAgent: { status: intent === "ORDER" ? "PROCESSING" : "IDLE" },
-          ProcurementAgent: { status: "IDLE" },
-          SupplierAgent: { status: intent === "SUPPLIER" ? "PROCESSING" : "IDLE" },
-          ManagerAgent: { status: "PROCESSING" },
-        },
-        intent,
-        product,
-        quantity,
-        confidence,
-        suggestedAction,
-      },
-    }))
-    await delay(600)
-
-    // Step 2: Inventory check or Supplier reply parse runs
-    if (intent === "ORDER") {
-      const hasProcurement = !!output.purchaseOrder || !!output.approval
-      saveProcessStates((prev) => ({
-        ...prev,
-        [emailId]: {
-          ...prev[emailId],
-          logs: logs.filter((l) => ["CustomerAgent", "InventoryAgent", "ManagerAgent"].includes(l.agentName)),
-          agents: {
-            CustomerAgent: { status: "SUCCESS" },
-            InventoryAgent: { status: "SUCCESS" },
-            ProcurementAgent: { status: hasProcurement ? "PROCESSING" : "IDLE" },
-            SupplierAgent: { status: "IDLE" },
-            ManagerAgent: { status: "PROCESSING" },
-          },
-        },
-      }))
-      await delay(600)
-
-      if (hasProcurement) {
-        saveProcessStates((prev) => ({
-          ...prev,
-          [emailId]: {
-            ...prev[emailId],
-            logs,
-            agents: {
-              CustomerAgent: { status: "SUCCESS" },
-              InventoryAgent: { status: "SUCCESS" },
-              ProcurementAgent: { status: "SUCCESS" },
-              SupplierAgent: { status: "IDLE" },
-              ManagerAgent: { status: approvalNeeded ? "PROCESSING" : "SUCCESS" },
-            },
-            aiStatus: approvalNeeded ? "PROCESSING" : "PROCESSED",
+      if (!res.ok || data.status === "error") {
+        setEmails(prev => prev.map(e => e.id === id ? {
+          ...e, status: "error",
+          result: {
+            workflow: "ERROR",
+            intent: "UNKNOWN",
+            reply: data.message ?? "An error occurred during processing.",
+            subject: null,
+            recipient: null,
+            template: null,
+            logs: data.logs ?? [],
             durationMs,
-            output,
-            approvalNeeded,
           },
-        }))
+        } : e))
         return
       }
-    } else if (intent === "SUPPLIER") {
-      saveProcessStates((prev) => ({
-        ...prev,
-        [emailId]: {
-          ...prev[emailId],
-          logs,
-          agents: {
-            CustomerAgent: { status: "SUCCESS" },
-            InventoryAgent: { status: "IDLE" },
-            ProcurementAgent: { status: "IDLE" },
-            SupplierAgent: { status: "SUCCESS" },
-            ManagerAgent: { status: "SUCCESS" },
-          },
-          aiStatus: "PROCESSED",
+
+      setEmails(prev => prev.map(e => e.id === id ? {
+        ...e, status: "done",
+        result: {
+          workflow:  data.workflow  ?? "UNKNOWN",
+          intent:    data.intent    ?? "UNKNOWN",
+          reply:     data.reply     ?? null,
+          subject:   data.subject   ?? null,
+          recipient: data.recipient ?? null,
+          template:  data.template  ?? null,
+          orderId:   data.orderId,
+          logs:      (data.logs as WorkflowLog[]) ?? [],
           durationMs,
-          output,
         },
-      }))
-      return
+      } : e))
+    } catch (err) {
+      setEmails(prev => prev.map(e => e.id === id ? {
+        ...e, status: "error",
+        result: {
+          workflow: "ERROR", intent: "UNKNOWN",
+          reply: err instanceof Error ? err.message : "Network error",
+          subject: null, recipient: null, template: null,
+          logs: [], durationMs: Date.now() - startMs,
+        },
+      } : e))
     }
+  }, [])
 
-    // Step 3: Finish and mark all complete
-    saveProcessStates((prev) => ({
-      ...prev,
-      [emailId]: {
-        ...prev[emailId],
-        logs,
-        agents: {
-          CustomerAgent: { status: "SUCCESS" },
-          InventoryAgent: { status: intent === "ORDER" ? "SUCCESS" : "IDLE" },
-          ProcurementAgent: { status: "IDLE" },
-          SupplierAgent: { status: "IDLE" },
-          ManagerAgent: { status: "SUCCESS" },
-        },
-        aiStatus: approvalNeeded ? "PROCESSING" : "PROCESSED",
-        durationMs,
-        output,
-        approvalNeeded,
-      },
-    }))
-  }
-
-  // Handle Approve/Reject action on the approval card
-  const handleResolveApproval = async (emailId: string, approvalId: string, action: "APPROVE" | "REJECT") => {
-    if (resolvingApproval) return
-    setResolvingApproval(true)
-
+  const handleApproveAndSend = useCallback(async (email: SimEmail) => {
+    if (!email.result?.reply || !email.result.recipient) return
+    setIsApproving(true)
     try {
-      const res = await fetch("/api/approvals/resolve", {
+      await fetch("/api/email/reply", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ approvalId, action }),
-      })
-
-      const data = (await res.json()) as Record<string, unknown>
-      if (data.status === "error") {
-        throw new Error((data.message as string) || "Failed to resolve approval.")
-      }
-
-      // Add a resolution log
-      const resLog: WorkflowLog = {
-        agentName: "ManagerAgent",
-        level: "INFO",
-        message: `Approval request resolved: ${action}D by manager. workflow closed.`,
-        timestamp: new Date().toISOString(),
-      }
-
-      const currentState = processStates[emailId]
-      saveProcessStates({
-        ...processStates,
-        [emailId]: {
-          ...currentState,
-          aiStatus: "PROCESSED",
-          approvalNeeded: null,
-          logs: [...currentState.logs, resLog],
-          agents: {
-            ...currentState.agents,
-            ManagerAgent: { status: "SUCCESS" },
-          },
-          output: {
-            ...currentState.output,
-            approvalResolved: action,
-          },
-        },
+        body: JSON.stringify({
+          recipient: email.result.recipient,
+          subject:   email.result.subject ?? `Re: ${email.subject}`,
+          body:      email.result.reply,
+          type:      email.result.template ?? "CUSTOMER_REPLY",
+        }),
       })
     } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err)
-      alert(msg)
+      console.error("Approve & Send failed:", err)
     } finally {
-      setResolvingApproval(false)
+      setIsApproving(false)
     }
-  }
-
-  // Helper styles
-  const getPriorityStyle = (priority: string) => {
-    switch (priority) {
-      case "HIGH":
-        return "text-rose-400 bg-rose-950/20 border-rose-900/30"
-      case "MEDIUM":
-        return "text-amber-400 bg-amber-950/20 border-amber-900/30"
-      default:
-        return "text-zinc-400 bg-zinc-900/40 border-zinc-800"
-    }
-  }
-
-  const getAiStatusStyle = (status: string) => {
-    switch (status) {
-      case "PROCESSING":
-        return "text-blue-400 bg-blue-950/20 border-blue-900/30 animate-pulse"
-      case "PROCESSED":
-        return "text-emerald-400 bg-emerald-950/20 border-emerald-900/30"
-      case "FAILURE":
-        return "text-rose-400 bg-rose-950/20 border-rose-900/30"
-      default:
-        return "text-zinc-505 bg-zinc-950/40 border-zinc-900"
-    }
-  }
-
-  // Filter emails based on selectors
-  const filteredEmails = emails.filter((email) => {
-    const query = searchQuery.toLowerCase()
-    if (query) {
-      const matchSubject = email.subject.toLowerCase().includes(query)
-      const matchBody = email.body.toLowerCase().includes(query)
-      const matchSender = email.sender.toLowerCase().includes(query)
-      if (!matchSubject && !matchBody && !matchSender) return false
-    }
-
-    if (priorityFilter && email.priority !== priorityFilter) return false
-
-    if (statusFilter) {
-      const emailState = processStates[email.id] || { aiStatus: "UNPROCESSED" }
-      if (statusFilter !== emailState.aiStatus) return false
-    }
-
-    return true
-  })
-
-  const currentState = selectedId
-    ? processStates[selectedId] || {
-        aiStatus: "UNPROCESSED" as const,
-        durationMs: null,
-        confidence: null,
-        intent: null,
-        product: null,
-        quantity: null,
-        suggestedAction: null,
-        logs: [],
-        agents: {
-          CustomerAgent: { status: "IDLE" as const },
-          InventoryAgent: { status: "IDLE" as const },
-          ProcurementAgent: { status: "IDLE" as const },
-          SupplierAgent: { status: "IDLE" as const },
-          ManagerAgent: { status: "IDLE" as const },
-        },
-        output: null,
-        approvalNeeded: null,
-      }
-    : null
+  }, [])
 
   return (
-    <div className="flex flex-col lg:flex-row gap-6 h-[calc(100vh-170px)] min-h-[650px] text-zinc-50 font-sans">
-      {/* ========================================================================= */}
-      {/* COLUMN 1: LEFT (30%) - Emails list, search and filters */}
-      {/* ========================================================================= */}
-      <div className="w-full lg:w-[30%] flex flex-col h-full shrink-0">
-        <Card className="flex-1 flex flex-col overflow-hidden bg-zinc-950/60 border-zinc-900 backdrop-blur-md">
-          {/* Search bar */}
-          <div className="p-3.5 border-b border-zinc-900 space-y-2 bg-zinc-950/40">
-            <div className="relative">
-              <Search className="absolute left-2.5 top-2.5 h-3.5 w-3.5 text-zinc-500" />
-              <input
-                type="text"
-                placeholder="Search workspace..."
-                value={searchQuery}
-                onChange={(e) => setSearchQuery(e.target.value)}
-                className="w-full bg-zinc-900 border border-zinc-800 rounded-md pl-8 pr-3 py-2 text-xs text-zinc-250 placeholder-zinc-550 focus:outline-none focus:border-zinc-700"
-              />
-            </div>
-            {/* Filters selectors */}
-            <div className="grid grid-cols-2 gap-2 text-[10px]">
-              <select
-                value={priorityFilter}
-                onChange={(e) => setPriorityFilter(e.target.value)}
-                className="bg-zinc-900 border border-zinc-800 rounded px-2 py-1 text-zinc-400 focus:outline-none cursor-pointer"
-              >
-                <option value="">All Priorities</option>
-                <option value="HIGH">High</option>
-                <option value="MEDIUM">Medium</option>
-                <option value="LOW">Low</option>
-              </select>
-              <select
-                value={statusFilter}
-                onChange={(e) => setStatusFilter(e.target.value)}
-                className="bg-zinc-900 border border-zinc-800 rounded px-2 py-1 text-zinc-400 focus:outline-none cursor-pointer"
-              >
-                <option value="">All AI Statuses</option>
-                <option value="UNPROCESSED">Unprocessed</option>
-                <option value="PROCESSING">Processing</option>
-                <option value="PROCESSED">Processed</option>
-                <option value="FAILURE">Failure</option>
-              </select>
-            </div>
-          </div>
+    <div style={{
+      display: "flex", height: "100%",
+      backgroundColor: "#09090b", color: "#f4f4f5",
+      fontFamily: "-apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif",
+      overflow: "hidden",
+    }}>
 
-          {/* List items */}
-          <div className="flex-1 overflow-y-auto divide-y divide-zinc-900/60 scrollbar-thin">
-            {filteredEmails.length === 0 ? (
-              <div className="flex flex-col items-center justify-center h-full text-zinc-500 text-xs py-8">
-                No communications found.
-              </div>
-            ) : (
-              filteredEmails.map((email) => {
-                const isSelected = email.id === selectedId
-                const emailState = processStates[email.id] || { aiStatus: "UNPROCESSED" }
-                const isUnread = emailState.aiStatus === "UNPROCESSED"
-                const dateStr = new Date(email.createdAt).toLocaleDateString(undefined, {
-                  month: "short",
-                  day: "numeric",
-                })
-
-                return (
-                  <button
-                    key={email.id}
-                    onClick={() => setSelectedId(email.id)}
-                    className={`w-full text-left block p-4 transition-all duration-150 hover:bg-zinc-900/30 ${
-                      isSelected ? "bg-zinc-900/50 border-r-2 border-blue-500" : "bg-transparent"
-                    }`}
-                  >
-                    <div className="space-y-2">
-                      <div className="flex items-center justify-between gap-2">
-                        <div className="flex items-center gap-1.5 min-w-0">
-                          {isUnread && (
-                            <span className="h-1.5 w-1.5 rounded-full bg-blue-500 shrink-0" />
-                          )}
-                          <span className="font-semibold text-xs text-zinc-200 truncate">
-                            {email.customer?.name || email.sender}
-                          </span>
-                        </div>
-                        <span className="text-[9px] text-zinc-500 whitespace-nowrap shrink-0">
-                          {dateStr}
-                        </span>
-                      </div>
-
-                      <div className="text-xs text-zinc-400 font-medium truncate">
-                        {email.subject}
-                      </div>
-
-                      <div className="flex items-center flex-wrap gap-2 pt-0.5">
-                        <span
-                          className={`px-1.5 py-0.5 rounded text-[8px] font-bold border tracking-wider uppercase ${getPriorityStyle(
-                            email.priority
-                          )}`}
-                        >
-                          {email.priority}
-                        </span>
-                        <span
-                          className={`px-1.5 py-0.5 rounded text-[8px] font-bold border tracking-wider uppercase ${getAiStatusStyle(
-                            emailState.aiStatus
-                          )}`}
-                        >
-                          {emailState.aiStatus.toLowerCase()}
-                        </span>
-                      </div>
-                    </div>
-                  </button>
-                )
-              })
+      {/* ── Left column: email list ─────────────────────────────────── */}
+      <div style={{
+        width: "320px", flexShrink: 0,
+        display: "flex", flexDirection: "column",
+        borderRight: "1px solid #18181b",
+      }}>
+        {/* Header */}
+        <div style={{
+          display: "flex", alignItems: "center", justifyContent: "space-between",
+          padding: "16px", borderBottom: "1px solid #18181b", flexShrink: 0,
+        }}>
+          <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+            <Bot size={16} color="#3B82F6" />
+            <span style={{ fontSize: "13px", fontWeight: 700, color: "#f4f4f5" }}>
+              AI Inbox
+            </span>
+            {emails.length > 0 && (
+              <span style={{
+                fontSize: "10px", fontWeight: 700, padding: "1px 6px",
+                borderRadius: "10px", backgroundColor: "#3B82F620",
+                color: "#3B82F6",
+              }}>
+                {emails.length}
+              </span>
             )}
           </div>
-        </Card>
-      </div>
+          <button
+            onClick={() => setShowCompose(true)}
+            style={{
+              display: "flex", alignItems: "center", gap: "6px",
+              padding: "0 12px", height: "32px", borderRadius: "6px",
+              background: "linear-gradient(135deg, #3B82F6 0%, #8B5CF6 100%)",
+              border: "none", cursor: "pointer",
+              fontSize: "12px", fontWeight: 700, color: "#fff",
+            }}
+          >
+            <Plus size={12} />
+            New Email
+          </button>
+        </div>
 
-      {/* ========================================================================= */}
-      {/* COLUMN 2: CENTER (45%) - Selected email body and AI Analysis details */}
-      {/* ========================================================================= */}
-      <div className="w-full lg:w-[45%] flex flex-col h-full min-w-0">
-        <Card className="flex-1 overflow-y-auto bg-zinc-950/60 border-zinc-900 backdrop-blur-md flex flex-col p-6 gap-6">
-          {selectedEmail ? (
-            <div className="flex-1 flex flex-col gap-5">
-              {/* Header */}
-              <div className="space-y-4 pb-5 border-b border-zinc-900/60">
-                <div className="flex flex-wrap items-start justify-between gap-4">
-                  <h2 className="text-base font-bold text-zinc-150 leading-snug tracking-tight">
-                    {selectedEmail.subject}
-                  </h2>
-                  <span
-                    className={`px-2 py-0.5 rounded text-[9px] font-bold border tracking-wider uppercase ${getPriorityStyle(
-                      selectedEmail.priority
-                    )}`}
-                  >
-                    {selectedEmail.priority}
-                  </span>
-                </div>
-
-                <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between text-xs gap-2 pt-1 text-zinc-400">
-                  <div>
-                    <span className="text-zinc-500 font-medium">From:</span>{" "}
-                    <span className="font-semibold text-zinc-300">
-                      {selectedEmail.customer?.name || "Unknown"}
-                    </span>{" "}
-                    <code className="text-zinc-500 text-[10px]">&lt;{selectedEmail.sender}&gt;</code>
-                  </div>
-                  <div className="text-zinc-500 text-[10px] font-medium font-mono whitespace-nowrap">
-                    {new Date(selectedEmail.createdAt).toLocaleString()}
-                  </div>
-                </div>
-              </div>
-
-              {/* Email Content Box */}
-              <div className="text-xs leading-relaxed text-zinc-300 bg-zinc-900/20 rounded-lg border border-zinc-900 p-4 whitespace-pre-wrap font-sans">
-                {selectedEmail.body}
-              </div>
-
-              {/* Actions row */}
-              <div className="flex items-center gap-3">
-                <button
-                  onClick={() => handleProcessEmail(selectedEmail)}
-                  disabled={isRunning || currentState?.aiStatus === "PROCESSING"}
-                  className={`flex items-center gap-2 py-2 px-4 rounded text-xs font-semibold transition-all duration-200 ${
-                    isRunning || currentState?.aiStatus === "PROCESSING"
-                      ? "bg-zinc-900 border border-zinc-800 text-zinc-650 cursor-not-allowed"
-                      : "bg-blue-600 hover:bg-blue-500 text-white shadow-md shadow-blue-900/10 active:scale-[0.98]"
-                  }`}
+        {/* Email list */}
+        <div style={{ flex: 1, overflowY: "auto" }}>
+          {emails.length === 0 ? (
+            <div style={{ padding: "24px 16px", textAlign: "center" }}>
+              <p style={{ fontSize: "12px", color: "#3f3f46", margin: 0 }}>
+                No simulated emails yet
+              </p>
+            </div>
+          ) : (
+            emails.map(email => {
+              const isSelected = selectedId === email.id
+              return (
+                <div
+                  key={email.id}
+                  onClick={() => setSelectedId(email.id)}
+                  style={{
+                    padding: "12px 16px",
+                    borderBottom: "1px solid #18181b",
+                    cursor: "pointer",
+                    backgroundColor: isSelected ? "#18181b" : "transparent",
+                    borderLeft: `3px solid ${isSelected ? "#3B82F6" : "transparent"}`,
+                    transition: "background-color 0.1s",
+                  }}
+                  onMouseEnter={e => { if (!isSelected) (e.currentTarget as HTMLDivElement).style.backgroundColor = "#131315" }}
+                  onMouseLeave={e => { if (!isSelected) (e.currentTarget as HTMLDivElement).style.backgroundColor = "transparent" }}
                 >
-                  <Sparkles className="h-3.5 w-3.5 shrink-0" />
-                  Process with AI
-                </button>
-              </div>
-
-              {/* AI Analysis details block */}
-              <div className="border-t border-zinc-900/80 pt-5 space-y-4">
-                <h3 className="text-xs font-bold text-zinc-400 uppercase tracking-wider">
-                  AI Extraction Summary
-                </h3>
-
-                <div className="grid grid-cols-2 gap-4">
-                  {/* Intent */}
-                  <div className="bg-zinc-900/20 border border-zinc-900 rounded-lg p-3 space-y-1.5">
-                    <span className="text-[10px] text-zinc-500 font-medium">Classified Intent</span>
-                    <div className="font-semibold text-xs text-zinc-200">
-                      {currentState?.intent ? (
-                        <span className="px-1.5 py-0.5 rounded bg-blue-950/20 border border-blue-900/40 text-blue-400 font-mono text-[10px]">
-                          {currentState.intent}
-                        </span>
-                      ) : (
-                        <span className="text-zinc-650 italic">None</span>
-                      )}
+                  <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: "4px" }}>
+                    <span style={{ fontSize: "12px", fontWeight: 700, color: "#d4d4d8", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", maxWidth: "180px" }}>
+                      {email.from}
+                    </span>
+                    <div style={{ flexShrink: 0, marginLeft: "6px" }}>
+                      {email.status === "done"       && <CheckCircle2 size={13} color="#10B981" />}
+                      {email.status === "processing" && <Loader2 size={13} color="#3B82F6" style={{ animation: "spin 1s linear infinite" }} />}
+                      {email.status === "error"      && <XCircle size={13} color="#EF4444" />}
+                      {email.status === "idle"       && <Clock size={13} color="#52525b" />}
                     </div>
                   </div>
-
-                  {/* Confidence */}
-                  <div className="bg-zinc-900/20 border border-zinc-900 rounded-lg p-3 space-y-1.5">
-                    <span className="text-[10px] text-zinc-500 font-medium">AI Confidence</span>
-                    <div className="font-semibold text-xs text-zinc-200">
-                      {currentState && currentState.confidence !== null ? (
-                        <span className="font-mono text-indigo-400 font-bold text-xs">
-                          {Math.round(currentState.confidence * 100)}%
-                        </span>
-                      ) : (
-                        <span className="text-zinc-650 italic">None</span>
-                      )}
-                    </div>
-                  </div>
-
-                  {/* Matched Product */}
-                  <div className="bg-zinc-900/20 border border-zinc-900 rounded-lg p-3 space-y-1.5">
-                    <span className="text-[10px] text-zinc-500 font-medium">Extracted Product</span>
-                    <div className="font-semibold text-xs text-zinc-200 truncate">
-                      {currentState?.product || <span className="text-zinc-650 italic">N/A</span>}
-                    </div>
-                  </div>
-
-                  {/* Extracted Quantity */}
-                  <div className="bg-zinc-900/20 border border-zinc-900 rounded-lg p-3 space-y-1.5">
-                    <span className="text-[10px] text-zinc-500 font-medium">Extracted Quantity</span>
-                    <div className="font-semibold text-xs text-zinc-200 font-mono">
-                      {currentState?.quantity !== null ? currentState?.quantity : <span className="text-zinc-650 italic">N/A</span>}
-                    </div>
-                  </div>
-                </div>
-
-                {/* Suggested Action card */}
-                {currentState && currentState.aiStatus !== "UNPROCESSED" && (
-                  <div className="bg-zinc-900/10 border border-zinc-900 rounded-lg p-4 space-y-2">
-                    <span className="text-[10px] text-zinc-500 font-semibold uppercase tracking-wider block">
-                      Suggested Action
-                    </span>
-                    <div className="flex items-start gap-2.5">
-                      <div className="p-1 rounded bg-blue-950/20 border border-blue-900/30 text-blue-400 mt-0.5">
-                        <FileText className="h-3.5 w-3.5" />
-                      </div>
-                      <div className="space-y-1">
-                        <div className="text-xs font-semibold text-zinc-200">
-                          {currentState.suggestedAction}
-                        </div>
-                        <p className="text-[10px] text-zinc-500 leading-normal">
-                          The manager orchestrator routed this inquiry to specialized sub-agents based on email intent.
-                        </p>
-                      </div>
-                    </div>
-                  </div>
-                )}
-              </div>
-            </div>
-          ) : (
-            <div className="flex-1 flex flex-col items-center justify-center p-6 text-zinc-500 text-xs text-center font-sans">
-              No email selected.
-            </div>
-          )}
-        </Card>
-      </div>
-
-      {/* ========================================================================= */}
-      {/* COLUMN 3: RIGHT (25%) - Live Agent Execution, statuses, timeline, approval */}
-      {/* ========================================================================= */}
-      <div className="w-full lg:w-[25%] flex flex-col h-full shrink-0">
-        <Card className="flex-1 overflow-y-auto bg-zinc-950/60 border-zinc-900 backdrop-blur-md flex flex-col p-5 gap-5">
-          {currentState && currentState.aiStatus !== "UNPROCESSED" ? (
-            <div className="space-y-5 flex-1 flex flex-col h-full">
-              {/* Agent Status Indicators */}
-              <div className="space-y-3">
-                <div className="flex justify-between items-center pb-1 border-b border-zinc-900/60">
-                  <h3 className="text-xs font-bold text-zinc-400 uppercase tracking-wider">
-                    Workforce Execution
-                  </h3>
-                  {currentState.durationMs && (
-                    <span className="text-[10px] text-emerald-400 font-mono font-bold">
-                      {currentState.durationMs} ms
-                    </span>
-                  )}
-                </div>
-
-                <div className="space-y-2 text-xs">
-                  {/* Manager Agent */}
-                  <div className="flex justify-between items-center p-2 rounded bg-zinc-900/10 border border-zinc-900/40">
-                    <span className="text-zinc-400">Manager Agent</span>
-                    <span
-                      className={`text-[9px] font-semibold font-mono uppercase px-1.5 py-0.5 rounded border ${
-                        currentState.agents.ManagerAgent?.status === "SUCCESS"
-                          ? "text-emerald-400 bg-emerald-950/20 border-emerald-900/40"
-                          : currentState.agents.ManagerAgent?.status === "PROCESSING"
-                          ? "text-blue-400 bg-blue-950/20 border-blue-900/40"
-                          : "text-zinc-550 bg-zinc-900 border-zinc-800"
-                      }`}
-                    >
-                      {currentState.agents.ManagerAgent?.status.toLowerCase()}
-                    </span>
-                  </div>
-
-                  {/* Customer Agent */}
-                  <div className="flex justify-between items-center p-2 rounded bg-zinc-900/10 border border-zinc-900/40">
-                    <span className="text-zinc-400">Customer Agent</span>
-                    <span
-                      className={`text-[9px] font-semibold font-mono uppercase px-1.5 py-0.5 rounded border ${
-                        currentState.agents.CustomerAgent?.status === "SUCCESS"
-                          ? "text-emerald-400 bg-emerald-950/20 border-emerald-900/40"
-                          : currentState.agents.CustomerAgent?.status === "PROCESSING"
-                          ? "text-blue-400 bg-blue-950/20 border-blue-900/40"
-                          : "text-zinc-550 bg-zinc-900 border-zinc-800"
-                      }`}
-                    >
-                      {currentState.agents.CustomerAgent?.status.toLowerCase()}
-                    </span>
-                  </div>
-
-                  {/* Inventory Agent */}
-                  <div className="flex justify-between items-center p-2 rounded bg-zinc-900/10 border border-zinc-900/40">
-                    <span className="text-zinc-400">Inventory Agent</span>
-                    <span
-                      className={`text-[9px] font-semibold font-mono uppercase px-1.5 py-0.5 rounded border ${
-                        currentState.agents.InventoryAgent?.status === "SUCCESS"
-                          ? "text-emerald-400 bg-emerald-950/20 border-emerald-900/40"
-                          : currentState.agents.InventoryAgent?.status === "PROCESSING"
-                          ? "text-blue-400 bg-blue-950/20 border-blue-900/40"
-                          : "text-zinc-550 bg-zinc-900 border-zinc-800"
-                      }`}
-                    >
-                      {currentState.agents.InventoryAgent?.status.toLowerCase()}
-                    </span>
-                  </div>
-
-                  {/* Procurement Agent */}
-                  <div className="flex justify-between items-center p-2 rounded bg-zinc-900/10 border border-zinc-900/40">
-                    <span className="text-zinc-400">Procurement Agent</span>
-                    <span
-                      className={`text-[9px] font-semibold font-mono uppercase px-1.5 py-0.5 rounded border ${
-                        currentState.agents.ProcurementAgent?.status === "SUCCESS"
-                          ? "text-emerald-400 bg-emerald-950/20 border-emerald-900/40"
-                          : currentState.agents.ProcurementAgent?.status === "PROCESSING"
-                          ? "text-blue-400 bg-blue-950/20 border-blue-900/40"
-                          : "text-zinc-550 bg-zinc-900 border-zinc-800"
-                      }`}
-                    >
-                      {currentState.agents.ProcurementAgent?.status.toLowerCase()}
-                    </span>
-                  </div>
-
-                  {/* Supplier Agent */}
-                  <div className="flex justify-between items-center p-2 rounded bg-zinc-900/10 border border-zinc-900/40">
-                    <span className="text-zinc-400">Supplier Agent</span>
-                    <span
-                      className={`text-[9px] font-semibold font-mono uppercase px-1.5 py-0.5 rounded border ${
-                        currentState.agents.SupplierAgent?.status === "SUCCESS"
-                          ? "text-emerald-400 bg-emerald-950/20 border-emerald-900/40"
-                          : currentState.agents.SupplierAgent?.status === "PROCESSING"
-                          ? "text-blue-400 bg-blue-950/20 border-blue-900/40"
-                          : "text-zinc-550 bg-zinc-900 border-zinc-800"
-                      }`}
-                    >
-                      {currentState.agents.SupplierAgent?.status.toLowerCase()}
-                    </span>
-                  </div>
-                </div>
-              </div>
-
-              {/* Approval Card */}
-              {selectedId && currentState.approvalNeeded && (
-                <div className="p-4 bg-yellow-950/20 border border-yellow-900/50 rounded-lg space-y-3 text-xs animate-slide-in">
-                  <div className="flex items-center gap-1.5 text-yellow-400 font-bold uppercase tracking-wider text-[10px]">
-                    <Clock className="h-3.5 w-3.5" />
-                    Approval Required
-                  </div>
-                  <p className="text-[11px] text-zinc-400 leading-relaxed font-sans">
-                    {currentState.approvalNeeded.comments || "Refill PO total exceeds $1,000 threshold."}
+                  <p style={{ fontSize: "12px", fontWeight: 600, color: "#a1a1aa", margin: "0 0 2px 0", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                    {email.subject}
                   </p>
-                  <div className="flex gap-2">
-                    <button
-                      onClick={() => handleResolveApproval(selectedId, currentState.approvalNeeded!.id, "REJECT")}
-                      disabled={resolvingApproval}
-                      className="flex-1 py-1.5 rounded text-[11px] font-semibold border border-rose-900/50 bg-rose-950/10 text-rose-400 hover:bg-rose-950/30 transition-all cursor-pointer"
-                    >
-                      Reject
-                    </button>
-                    <button
-                      onClick={() => handleResolveApproval(selectedId, currentState.approvalNeeded!.id, "APPROVE")}
-                      disabled={resolvingApproval}
-                      className="flex-1 py-1.5 rounded text-[11px] font-semibold bg-emerald-600 text-white hover:bg-emerald-500 transition-all cursor-pointer"
-                    >
-                      Approve
-                    </button>
+                  <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+                    <span style={{ fontSize: "11px", color: "#3f3f46", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", maxWidth: "160px" }}>
+                      {email.message}
+                    </span>
+                    <span style={{ fontSize: "10px", color: "#3f3f46", flexShrink: 0, marginLeft: "4px" }}>
+                      {formatRelative(email.sentAt)}
+                    </span>
                   </div>
-                </div>
-              )}
-
-              {/* Workflow timeline */}
-              <div className="flex flex-col gap-2 flex-1 min-h-0">
-                <h3 className="text-xs font-bold text-zinc-400 uppercase tracking-wider pb-1 border-b border-zinc-900/60">
-                  Execution Timeline
-                </h3>
-                <div className="flex-1 overflow-y-auto bg-zinc-950 border border-zinc-900/80 p-3 rounded-lg font-mono text-[9px] text-zinc-550 space-y-2.5 max-h-[300px]">
-                  {currentState.logs.length === 0 ? (
-                    <div className="italic text-zinc-750">Logs stream pending...</div>
-                  ) : (
-                    currentState.logs.map((log, index) => {
-                      const timeStr = new Date(log.timestamp).toLocaleTimeString()
-                      return (
-                        <div key={index} className="space-y-0.5 border-b border-zinc-900/40 pb-1.5 last:border-0 last:pb-0">
-                          <div className="flex justify-between items-center">
-                            <span className="text-blue-500 font-semibold">[{log.agentName}]</span>
-                            <span className="text-[8px] text-zinc-600">{timeStr}</span>
-                          </div>
-                          <p
-                            className={
-                              log.level === "ERROR"
-                                ? "text-rose-400 leading-normal"
-                                : log.level === "WARN"
-                                ? "text-amber-400 leading-normal"
-                                : "text-zinc-300 leading-normal"
-                            }
-                          >
-                            {log.message}
-                          </p>
-                        </div>
-                      )
-                    })
+                  {email.result && (
+                    <div style={{
+                      marginTop: "6px", display: "flex", alignItems: "center", gap: "5px",
+                    }}>
+                      {(() => {
+                        const im = INTENT_META[email.result.intent] ?? INTENT_META.UNKNOWN
+                        const Icon = im.icon
+                        return (
+                          <>
+                            <Icon size={10} color={im.color} />
+                            <span style={{ fontSize: "10px", fontWeight: 600, color: im.color }}>
+                              {im.label}
+                            </span>
+                          </>
+                        )
+                      })()}
+                      <span style={{ fontSize: "10px", color: "#3f3f46" }}>·</span>
+                      <span style={{ fontSize: "10px", color: "#3f3f46" }}>
+                        {(email.result.durationMs / 1000).toFixed(1)}s
+                      </span>
+                    </div>
                   )}
                 </div>
-              </div>
-            </div>
-          ) : (
-            <div className="h-full flex flex-col items-center justify-center text-zinc-500 text-xs text-center font-sans py-12">
-              Process with AI to initiate operational workforce triggers.
-            </div>
+              )
+            })
           )}
-        </Card>
+        </div>
       </div>
+
+      {/* ── Right: detail panel ─────────────────────────────────────── */}
+      <div style={{ flex: 1, overflow: "hidden" }}>
+        {selectedEmail ? (
+          <ResultPanel
+            email={selectedEmail}
+            onApproveAndSend={handleApproveAndSend}
+            isSending={isApproving}
+          />
+        ) : (
+          <EmptyState onNew={() => setShowCompose(true)} />
+        )}
+      </div>
+
+      {/* ── Compose modal ──────────────────────────────────────────── */}
+      {showCompose && (
+        <ComposeModal
+          onClose={() => setShowCompose(false)}
+          onSend={handleSendToAI}
+          isSending={isSending}
+        />
+      )}
+
+      <style>{`
+        @keyframes spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
+        *::-webkit-scrollbar { width: 4px; }
+        *::-webkit-scrollbar-track { background: transparent; }
+        *::-webkit-scrollbar-thumb { background: #27272a; border-radius: 4px; }
+      `}</style>
     </div>
   )
 }

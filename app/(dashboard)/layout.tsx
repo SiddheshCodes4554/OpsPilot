@@ -16,13 +16,14 @@ export default async function DashboardLayout({
     {
       title: "Workspace",
       items: [
-        { label: "Dashboard", href: "/dashboard", icon: "dashboard" },
-        { label: "Inbox", href: "/inbox", icon: "inbox" },
-        { label: "Inventory", href: "/inventory", icon: "inventory" },
-        { label: "Procurement", href: "/procurement", icon: "procurement" },
-        { label: "Approvals", href: "/approvals", icon: "approvals" },
-        { label: "Workforce", href: "#", icon: "users", badge: "3" },
-        { label: "Operations", href: "#", icon: "activity" },
+        { label: "Dashboard",      href: "/dashboard",  icon: "dashboard"  },
+        { label: "Inbox",          href: "/inbox",       icon: "inbox"      },
+        { label: "Inventory",      href: "/inventory",   icon: "inventory"  },
+        { label: "Procurement",    href: "/procurement", icon: "procurement"},
+        { label: "Approvals",      href: "/approvals",   icon: "approvals"  },
+        { label: "Email History",  href: "/emails",      icon: "mail"       },
+        { label: "Workforce",      href: "#",            icon: "users", badge: "3" },
+        { label: "Operations",     href: "#",            icon: "activity"   },
       ],
     },
     {
